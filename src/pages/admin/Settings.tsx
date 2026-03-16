@@ -24,6 +24,7 @@ export default function Settings() {
   const [tryOffset, setTryOffset] = useState("0");
   const [message, setMessage] = useState("");
   const [isUploading, setIsUploading] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchSettings = () => {
@@ -464,6 +465,62 @@ export default function Settings() {
                   className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-3 border"
                   placeholder="مثال: التطبيق متوقف حالياً للصيانة، يرجى العودة لاحقاً..."
                 />
+              </div>
+            )}
+          </div>
+
+          <div className="pt-6 border-t border-gray-200">
+            <h2 className="text-lg font-medium text-red-600 mb-4 flex items-center">
+              <Trash2 className="w-5 h-5 ml-2" />
+              تصفير البيانات
+            </h2>
+            <p className="text-sm text-gray-500 mb-4">
+              سيؤدي هذا الإجراء إلى حذف جميع طلبات الشحن وطلبات الشراء من النظام بشكل نهائي. لا يمكن التراجع عن هذا الإجراء.
+            </p>
+            
+            {!showResetConfirm ? (
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                className="w-full sm:w-auto flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+              >
+                تصفير الطلبات وطلبات الشحن
+              </button>
+            ) : (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                <p className="text-red-800 font-medium mb-4">
+                  هل أنت متأكد من أنك تريد حذف جميع الطلبات وطلبات الشحن؟ لا يمكن التراجع عن هذا الإجراء!
+                </p>
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        const res = await apiFetch("/api/admin/reset-data", {
+                          method: "POST"
+                        });
+                        if (res.ok) {
+                          setMessage("تم تصفير البيانات بنجاح");
+                          setShowResetConfirm(false);
+                        } else {
+                          setMessage("حدث خطأ أثناء تصفير البيانات");
+                        }
+                      } catch (err) {
+                        setMessage("حدث خطأ في الاتصال");
+                      }
+                    }}
+                    className="flex-1 sm:flex-none justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700"
+                  >
+                    نعم، احذف البيانات
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowResetConfirm(false)}
+                    className="flex-1 sm:flex-none justify-center py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+                  >
+                    إلغاء
+                  </button>
+                </div>
               </div>
             )}
           </div>

@@ -20,7 +20,8 @@ import {
   Check,
   Users as UsersIcon,
   Pencil,
-  Smartphone
+  Smartphone,
+  Bell
 } from "lucide-react";
 
 import { useSocket } from "../hooks/useSocket";
@@ -251,14 +252,14 @@ export default function Layout() {
         }
       });
 
-      socket.on('order_updated', ({ userId }: { userId: number }) => {
-        if (userId === user.id || user.role === 'admin') {
+      socket.on('order_updated', (data?: { userId: number }) => {
+        if (!data || !data.userId || data.userId === user.id || user.role === 'admin') {
           fetchNotifications();
         }
       });
 
-      socket.on('recharge_updated', ({ userId }: { userId: number }) => {
-        if (userId === user.id || user.role === 'admin') {
+      socket.on('recharge_updated', (data?: { userId: number }) => {
+        if (!data || !data.userId || data.userId === user.id || user.role === 'admin') {
           fetchNotifications();
         }
       });
@@ -381,8 +382,8 @@ export default function Layout() {
 
             {/* Balance Display (Left side in RTL) */}
             <div className="flex items-center space-x-3 space-x-reverse">
-              <Link to="/mail" className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors">
-                <Mail className="w-6 h-6" />
+              <Link to={user.role === 'admin' ? "/admin/orders" : "/orders"} className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors">
+                <Bell className="w-6 h-6" />
                 {totalNotifications > 0 && (
                   <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white border-2 border-white">
                     {totalNotifications}

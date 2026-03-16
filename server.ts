@@ -1447,6 +1447,25 @@ app.put("/api/settings", asyncHandler(async (req: any, res: any) => {
   }
 }));
 
+app.post("/api/admin/reset-data", asyncHandler(async (req: any, res: any) => {
+  try {
+    await db.transaction(async () => {
+      await db.prepare("DELETE FROM orders").run();
+      await db.prepare("DELETE FROM recharge_requests").run();
+    })();
+    
+    const io = app.get("io");
+    if (io) {
+      io.emit("order_updated");
+      io.emit("recharge_updated");
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error resetting data:", error);
+    res.status(500).json({ error: "Failed to reset data" });
+  }
+}));
+
 // Telegram Notification Helper
 // Simple notification queue to handle rate limiting
 let notificationQueue = Promise.resolve();
@@ -2624,13 +2643,22 @@ async function startServer() {
       console.error("Failed to initialize Vite middleware:", e);
     }
   } else {
+    // 1. تحديد المسار الصحيح للمجلد
     const distPath = path.resolve(__dirname, "dist");
+    
+    // 2. خدمة ملفات الواجهة الأمامية
     app.use(express.static(distPath));
-    app.use("*", (req, res) => {
+
+    // 3. توجيه جميع الطلبات (عدا الـ API) لملف index.html
+    app.get("*", (req, res, next) => {
+      // إذا كان الطلب يبدأ بـ /api، لا تلمسه (ليعمل الـ API)
+      if (req.originalUrl.startsWith('/api')) {
+        return next();
+      }
+      // إرسال صفحة الموقع
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
-
   const PORT = process.env.PORT || 3000;
   server.listen(PORT as number, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);

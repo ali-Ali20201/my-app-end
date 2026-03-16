@@ -1,26 +1,23 @@
 import { useState, useEffect } from 'react';
-import { Download, X } from 'lucide-react';
+import { Navigate, useNavigate } from 'react-router-dom';
 
 export default function InstallPWA() {
+  const navigate = useNavigate();
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showBanner, setShowBanner] = useState(false);
+  
+  // 1. التحقق مما إذا كان التطبيق مثبتاً بالفعل
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+
+  // 2. نجعل الصفحة تظهر دائماً بشكل افتراضي لكي لا تظهر شاشة بيضاء
+  const [showBanner, setShowBanner] = useState(true);
 
   useEffect(() => {
     const handler = (e: any) => {
-      // Prevent Chrome 67 and earlier from automatically showing the prompt
       e.preventDefault();
-      // Stash the event so it can be triggered later.
       setDeferredPrompt(e);
-      // Update UI notify the user they can add to home screen
-      setShowBanner(true);
     };
 
     window.addEventListener('beforeinstallprompt', handler);
-
-    // Check if already installed
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setShowBanner(false);
-    }
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handler);
@@ -28,48 +25,58 @@ export default function InstallPWA() {
   }, []);
 
   const handleInstall = async () => {
-    if (!deferredPrompt) return;
-
-    // Show the prompt
-    deferredPrompt.prompt();
-
-    // Wait for the user to respond to the prompt
-    const { outcome } = await deferredPrompt.userChoice;
-    console.log(`User response to the install prompt: ${outcome}`);
-
-    // We've used the prompt, and can't use it again, throw it away
-    setDeferredPrompt(null);
-    setShowBanner(false);
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log(`User response: ${outcome}`);
+      setDeferredPrompt(null);
+      // بعد التثبيت بنجاح، نوجهه للصفحة الرئيسية
+      navigate('/home');
+    } else {
+      // إذا كان المتصفح يمنع النافذة (مثل الآيفون)، نظهر له رسالة إرشادية
+      alert('لتثبيت التطبيق:\n\n📱 في الآيفون: اضغط زر المشاركة (السهم للأعلى) في أسفل الشاشة ثم اختر "إضافة للشاشة الرئيسية".\n\n🤖 في الأندرويد: من قائمة المتصفح (النقاط الثلاث) اختر "تثبيت التطبيق" أو "Add to Home screen".');
+    }
   };
 
-  if (!showBanner) return null;
+  // 3. إذا كان التطبيق مثبتاً، أو إذا كان الرابط هو رابط الأدمن، نوجهه فوراً ولا نظهر الشاشة الزرقاء
+  if (isStandalone || window.location.pathname === '/adminali20112024') {
+    return <Navigate to="/home" replace />;
+  }
+
+  if (!showBanner) return <Navigate to="/home" replace />;
 
   return (
-    <div className="fixed bottom-24 left-4 right-4 z-[100] animate-in fade-in slide-in-from-bottom-4 duration-300" dir="rtl">
-      <div className="bg-white rounded-2xl shadow-2xl p-4 border border-indigo-100 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200 shrink-0">
-            <Download size={24} />
-          </div>
-          <div>
-            <h3 className="font-bold text-gray-900 text-sm">تثبيت تطبيق علي كاش</h3>
-            <p className="text-xs text-gray-500">للوصول السريع والسهل لخدماتنا</p>
-          </div>
+    /* الخلفية الزرقاء التي تغطي كامل الشاشة كما في الصورة */
+    <div className="fixed inset-0 bg-[#4f46e5] z-[100] flex flex-col items-center justify-center p-8 animate-in fade-in duration-500" dir="rtl">
+      
+      <div className="flex flex-col items-center w-full max-w-sm text-center">
+        
+        {/* المربع الذي يحتوي على أيقونة التطبيق (icon.png) */}
+        <div className="w-48 h-48 bg-white/10 backdrop-blur-sm rounded-[40px] shadow-2xl flex items-center justify-center mb-10 border border-white/20">
+          <img 
+            src="icon.png" 
+            alt="Ali Cash Icon" 
+            className="w-32 h-32 object-contain"
+          />
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleInstall}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:bg-indigo-700 transition-colors whitespace-nowrap"
-          >
-            تثبيت
-          </button>
-          <button
-            onClick={() => setShowBanner(false)}
-            className="p-2 text-gray-400 hover:text-gray-600 shrink-0"
-          >
-            <X size={20} />
-          </button>
-        </div>
+
+        {/* النصوص المطابقة للصورة تماماً */}
+        <h1 className="text-white text-4xl font-bold mb-4 tracking-tight">
+          مرحباً بك في علي كاش
+        </h1>
+        
+        <p className="text-indigo-100 text-lg mb-12 leading-relaxed">
+          ثبت التطبيق الآن للوصول السريع والتنبيهات الفورية
+        </p>
+
+        {/* زر التثبيت */}
+        <button
+          onClick={handleInstall}
+          className="w-full bg-white text-[#4f46e5] py-4 rounded-2xl text-xl font-bold shadow-xl hover:bg-indigo-50 transition-all active:scale-95 mb-4"
+        >
+          تثبيت التطبيق
+        </button>
+
       </div>
     </div>
   );
