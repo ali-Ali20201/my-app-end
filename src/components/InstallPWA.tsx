@@ -77,6 +77,14 @@ export default function InstallPWA() {
           تثبيت التطبيق
         </button>
 
+        {/* زر الدخول للموقع (مهم جداً لكي لا يعلق المستخدم) */}
+        <button
+          onClick={() => navigate('/home')}
+          className="w-full bg-transparent text-white border border-white/30 py-4 rounded-2xl text-lg font-bold hover:bg-white/10 transition-all active:scale-95"
+        >
+          الدخول للموقع
+        </button>
+
       </div>
     </div>
   );

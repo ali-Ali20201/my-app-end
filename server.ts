@@ -869,7 +869,7 @@ app.get("/api/notifications/:userId", asyncHandler(async (req: any, res: any) =>
         "SELECT COUNT(*) as count FROM recharge_requests WHERE status = 'pending'",
       )
       .get()) as any;
-    res.json({ orders: orders.count, recharges: recharges.count });
+    res.json({ orders: orders.count, recharges: recharges.count, messages: 0 });
   } else {
     const orders = (await db
       .prepare(
@@ -881,7 +881,16 @@ app.get("/api/notifications/:userId", asyncHandler(async (req: any, res: any) =>
         "SELECT COUNT(*) as count FROM recharge_requests WHERE user_id = ? AND status != 'pending' AND user_read = 0",
       )
       .get(user.id)) as any;
-    res.json({ orders: orders.count, recharges: recharges.count });
+    const messages = (await db
+      .prepare(
+        "SELECT COUNT(*) as count FROM messages WHERE user_id = ? AND is_read = 0",
+      )
+      .get(user.id)) as any;
+    res.json({ 
+      orders: orders.count, 
+      recharges: recharges.count, 
+      messages: messages.count 
+    });
   }
 }));
 
@@ -901,6 +910,11 @@ app.post("/api/notifications/read", asyncHandler(async (req: any, res: any) => {
     await db
       .prepare(
         "UPDATE recharge_requests SET user_read = 1 WHERE user_id = ? AND status != 'pending'",
+      )
+      .run(user_id);
+    await db
+      .prepare(
+        "UPDATE messages SET is_read = 1 WHERE user_id = ?",
       )
       .run(user_id);
   }
@@ -960,6 +974,15 @@ app.post("/api/admin/messages", asyncHandler(async (req: any, res: any) => {
   await db
     .prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
     .run(userId, title, content);
+
+  if (userId) {
+    sendPushNotification(userId, title, content);
+  } else {
+    // Notify all users
+    const users = await db.prepare("SELECT id FROM users").all() as any[];
+    users.forEach(u => sendPushNotification(u.id, title, content));
+  }
+
   res.json({ success: true });
 }));
 
@@ -1033,6 +1056,15 @@ app.post("/api/admin/balance", asyncHandler(async (req: any, res: any) => {
     const io = app.get("io");
     if (io)
       io.emit("balance_updated", { userId: parseInt(userId), newBalance });
+
+    const title = action === "add" ? "تم إضافة رصيد" : "تم سحب رصيد";
+    const body = action === "add" 
+      ? `قام المسؤول بإضافة ${amountInUserCurrency} ${user.preferred_currency} إلى حسابك.`
+      : `قام المسؤول بسحب ${amountInUserCurrency} ${user.preferred_currency} من حسابك.`;
+    
+    sendPushNotification(parseInt(userId), title, body);
+    await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+      .run(userId, title, body);
 
     res.json({ success: true, newBalance });
   } catch (err) {
@@ -1447,25 +1479,6 @@ app.put("/api/settings", asyncHandler(async (req: any, res: any) => {
   }
 }));
 
-app.post("/api/admin/reset-data", asyncHandler(async (req: any, res: any) => {
-  try {
-    await db.transaction(async () => {
-      await db.prepare("DELETE FROM orders").run();
-      await db.prepare("DELETE FROM recharge_requests").run();
-    })();
-    
-    const io = app.get("io");
-    if (io) {
-      io.emit("order_updated");
-      io.emit("recharge_updated");
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error("Error resetting data:", error);
-    res.status(500).json({ error: "Failed to reset data" });
-  }
-}));
-
 // Telegram Notification Helper
 // Simple notification queue to handle rate limiting
 let notificationQueue = Promise.resolve();
@@ -1636,6 +1649,15 @@ app.put("/api/recharge/:id", asyncHandler(async (req: any, res: any) => {
         .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
         .run(amountInUserCurrency, request.user_id);
       console.log(`[Recharge Action] Balance update result:`, balanceUpdate);
+
+      const title = status === "accepted" ? "تم قبول طلب الشحن" : "تعذر قبول طلب الشحن";
+      const body = status === "accepted"
+        ? `تم قبول طلب شحنك وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`
+        : `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}.`;
+
+      sendPushNotification(request.user_id, title, body);
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(request.user_id, title, body);
 
       const io = app.get("io");
       if (io) {
@@ -2105,12 +2127,20 @@ app.put("/api/orders/:id", asyncHandler(async (req: any, res: any) => {
         .run(order.paid_price || 0, order.user_id);
       console.log(`[Order Action] Refund result:`, refundResult);
     }
+
+    const title = status === "accepted" ? "تم قبول طلب الشراء" : "تعذر قبول طلب الشراء";
+    const body = status === "accepted"
+      ? `تم قبول طلبك بنجاح! لقد وصلتك رسالة بريد بالتفاصيل.`
+      : `لقد تعذر قبول طلبك وتم استعادة المبلغ لرصيدك.`;
+
+    sendPushNotification(order.user_id, title, body);
+    await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+      .run(order.user_id, title, body);
   })();
 
   const io = app.get("io");
   if (io) {
     io.emit("order_updated", { userId: order.user_id });
-    sendPushNotification(order.user_id, "تحديث حالة الطلب", `تم تحديث حالة طلبك إلى: ${status === 'accepted' ? 'مقبول' : 'مرفوض'}`);
     if (status === "rejected") {
       const updatedUser = (await db
         .prepare("SELECT balance FROM users WHERE id = ?")
@@ -2214,6 +2244,16 @@ async function startServer() {
 
     dbInitialized = true;
     console.log("Database initialized successfully");
+
+    // One-time cleanup of recharge and purchase requests as requested by user
+    try {
+      console.log("[Cleanup] Deleting all recharge and purchase requests...");
+      await db.prepare("DELETE FROM orders").run();
+      await db.prepare("DELETE FROM recharge_requests").run();
+      console.log("[Cleanup] Done.");
+    } catch (e) {
+      console.error("[Cleanup] Error:", e);
+    }
 
     // Test connection
     try {
@@ -2426,6 +2466,7 @@ async function startServer() {
           user_id INTEGER,
           title TEXT,
           content TEXT,
+          is_read INTEGER DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY(user_id) REFERENCES users(id)
       );
@@ -2445,6 +2486,17 @@ async function startServer() {
   } catch (e) {
     console.error("Error creating push_subscriptions table:", e);
   }
+
+  try {
+    const tableInfo = (await db
+      .prepare(
+        "SELECT column_name as name FROM information_schema.columns WHERE table_name = 'messages'",
+      )
+      .all()) as any[];
+    if (!tableInfo.some((col) => col.name === "is_read")) {
+      await db.exec("ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0;");
+    }
+  } catch (e) {}
 
   // Default settings
   try {
@@ -2532,6 +2584,20 @@ async function startServer() {
     res.json(uniqueUsers);
   });
 
+  // Clear all requests (Admin only)
+  app.post("/api/admin/clear-all-requests", asyncHandler(async (req: any, res: any) => {
+    await db.transaction(async () => {
+      await db.prepare("DELETE FROM orders").run();
+      await db.prepare("DELETE FROM recharge_requests").run();
+    });
+    const io = app.get("io");
+    if (io) {
+      io.emit("order_updated");
+      io.emit("recharge_updated");
+    }
+    res.json({ success: true, message: "تم حذف جميع طلبات الشحن والشراء بنجاح" });
+  }));
+
   // Error handling middleware
   app.use((err: any, req: any, res: any, next: any) => {
     const status = err.status || 500;
@@ -2555,56 +2621,114 @@ async function startServer() {
     if (update && update.callback_query) {
       console.log("[Telegram Debug] Callback query received:", update.callback_query);
       const { id, data, message } = update.callback_query;
-      const [action, rechargeId, userId] = data.split(":");
+      const parts = data.split(":");
+      const action = parts[0];
+      const requestId = parts[1];
+      const userId = parts[2];
       
-      const status = action === "recharge_accept" ? "accepted" : "rejected";
-      
-      const request = (await db
-        .prepare("SELECT * FROM recharge_requests WHERE id = ?")
-        .get(rechargeId)) as any;
+      if (action.startsWith("recharge_")) {
+        const status = action === "recharge_accept" ? "accepted" : "rejected";
         
-      console.log("[Telegram Debug] Request found:", !!request, "Status:", request?.status);
-      if (request && request.status === "pending") {
-        await db.transaction(async () => {
-          await db
-            .prepare("UPDATE recharge_requests SET status = ? WHERE id = ?")
-            .run(status, rechargeId);
-          if (status === "accepted") {
-            const user = (await db
-              .prepare("SELECT preferred_currency FROM users WHERE id = ?")
-              .get(userId)) as any;
-            const rates = await getRates();
-            const amountInUserCurrency = convertCurrency(
-              request.amount,
-              request.currency,
-              user.preferred_currency,
-              rates,
-            );
-
+        const request = (await db
+          .prepare("SELECT * FROM recharge_requests WHERE id = ?")
+          .get(requestId)) as any;
+          
+        console.log("[Telegram Debug] Recharge request found:", !!request, "Status:", request?.status);
+        if (request && request.status === "pending") {
+          await db.transaction(async () => {
             await db
-              .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
-              .run(amountInUserCurrency, userId);
-            
-            // Notify user
-            sendTelegramNotification(`تم قبول طلب شحنك بمبلغ ${request.amount} ${request.currency}.`);
-          } else {
-            // Notify user
-            sendTelegramNotification(`الرجاء التحقق من طلب شحنك بمبلغ ${request.amount} ${request.currency}.`);
-          }
-        });
+              .prepare("UPDATE recharge_requests SET status = ? WHERE id = ?")
+              .run(status, requestId);
+            if (status === "accepted") {
+              const user = (await db
+                .prepare("SELECT preferred_currency FROM users WHERE id = ?")
+                .get(userId)) as any;
+              const rates = await getRates();
+              const amountInUserCurrency = convertCurrency(
+                request.amount,
+                request.currency,
+                user.preferred_currency,
+                rates,
+              );
+
+              await db
+                .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
+                .run(amountInUserCurrency, userId);
+              
+              // Notify user via push
+              sendPushNotification(Number(userId), "تم قبول طلب الشحن", `تم قبول طلب شحنك وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`);
+
+              // Also send an internal message
+              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+                .run(userId, "تم قبول شحن الرصيد", `تم قبول طلب شحنك بمبلغ ${request.amount} ${request.currency} وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`);
+            } else {
+              // Notify user via push
+              sendPushNotification(Number(userId), "تعذر قبول طلب الشحن", `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}.`);
+
+              // Also send an internal message
+              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+                .run(userId, "تعذر قبول شحن الرصيد", `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}. يرجى التواصل مع الدعم للمزيد من التفاصيل.`);
+            }
+          });
+          
+          // Update Telegram message
+          const newText = message.text + `\n\n<b>تم ${status === "accepted" ? "القبول" : "الرفض"}</b>`;
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: message.chat.id,
+              message_id: message.message_id,
+              text: newText,
+              parse_mode: "HTML"
+            })
+          });
+        }
+      } else if (action.startsWith("order_")) {
+        const status = action === "order_accept" ? "accepted" : "rejected";
         
-        // Update Telegram message
-        const newText = message.text + `\n\n<b>تم ${status === "accepted" ? "القبول" : "الرفض"}</b>`;
-        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chat_id: message.chat.id,
-            message_id: message.message_id,
-            text: newText,
-            parse_mode: "HTML"
-          })
-        });
+        const order = (await db
+          .prepare("SELECT * FROM orders WHERE id = ?")
+          .get(requestId)) as any;
+          
+        console.log("[Telegram Debug] Order found:", !!order, "Status:", order?.status);
+        if (order && order.status === "pending") {
+          await db.transaction(async () => {
+            await db
+              .prepare("UPDATE orders SET status = ? WHERE id = ?")
+              .run(status, requestId);
+              
+            if (status === "rejected") {
+              // Refund user
+              await db
+                .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
+                .run(order.paid_price || 0, userId);
+              
+              // Notify user via push
+              sendPushNotification(Number(userId), "تعذر قبول طلب الشراء", `لقد تعذر قبول طلبك وتم استعادة المبلغ لرصيدك.`);
+            } else {
+              // Notify user via push
+              sendPushNotification(Number(userId), "تم قبول طلب الشراء", `تم قبول طلبك بنجاح! لقد وصلتك رسالة بريد بالتفاصيل.`);
+              
+              // Also send an internal message
+              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+                .run(userId, "تم قبول طلبك", `تم قبول طلبك للمنتج: ${order.product_name}. شكراً لتعاملك معنا.`);
+            }
+          });
+          
+          // Update Telegram message
+          const newText = message.text + `\n\n<b>تم ${status === "accepted" ? "القبول" : "الرفض"}</b>`;
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: message.chat.id,
+              message_id: message.message_id,
+              text: newText,
+              parse_mode: "HTML"
+            })
+          });
+        }
       }
       
       await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {

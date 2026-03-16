@@ -32,70 +32,51 @@ import Users from "./pages/admin/Users";
 import AdminLogin from "./pages/AdminLogin";
 
 export default function App() {
-  // 1. قراءة الرابط الحالي (Path)
-  const currentPath = window.location.pathname;
-
-  // 2. التحقق مما إذا كان الرابط هو الرابط السري للأدمن
-  const isAdminPath = currentPath.startsWith('/adminali20112024');
-
   return (
     <AuthProvider>
       <NotificationProvider>
         <CurrencyProvider>
           <BrowserRouter>
             <MobileAppHandler />
-            
-            {/* ========================================== */}
-            {/* 🛡️ مسارات تطبيق الإدارة (إذا كان الرابط هو الرابط السري) */}
-            {/* ========================================== */}
-            {isAdminPath ? (
-              <Routes>
-                {/* الصفحة الرئيسية للأدمن هي صفحة تسجيل الدخول/التثبيت */}
-                <Route path="/adminali20112024" element={<AdminPage />} />
-                <Route path="/adminali20112024/login" element={<AdminLogin />} />
+            <Routes>
+              {/* --- الصفحات العامة (تظهر للجميع بدون تسجيل دخول) --- */}
+              
+              {/* 1. واجهة التثبيت الزرقاء للمستخدم (الصفحة الرئيسية) */}
+              <Route path="/" element={<InstallPWA />} />
 
-                {/* مسارات الإدارة المحمية */}
-                <Route path="/adminali20112024" element={<Layout />}>
-                  <Route path="dashboard" element={<ProtectedRoute adminOnly><Dashboard /></ProtectedRoute>} />
-                  <Route path="products" element={<ProtectedRoute adminOnly><Products /></ProtectedRoute>} />
-                  <Route path="categories" element={<ProtectedRoute adminOnly><Categories /></ProtectedRoute>} />
-                  <Route path="recharges" element={<ProtectedRoute adminOnly><Recharges /></ProtectedRoute>} />
-                  <Route path="orders" element={<ProtectedRoute adminOnly><AdminOrders /></ProtectedRoute>} />
-                  <Route path="promo-codes" element={<ProtectedRoute adminOnly><AdminPromoCodes /></ProtectedRoute>} />
-                  <Route path="settings" element={<ProtectedRoute adminOnly><Settings /></ProtectedRoute>} />
-                  <Route path="messages" element={<ProtectedRoute adminOnly><Messages /></ProtectedRoute>} />
-                  <Route path="balance" element={<ProtectedRoute adminOnly><Balance /></ProtectedRoute>} />
-                  <Route path="users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
-                </Route>
+              {/* 2. واجهة الأدمن الحمراء (الرابط السري) */}
+              <Route path="/adminali20112024" element={<AdminPage />} />
 
-                {/* أي رابط خاطئ في الأدمن يعود للرئيسية للأدمن */}
-                <Route path="*" element={<Navigate to="/adminali20112024" replace />} />
-              </Routes>
-            ) : (
-            
-            /* ========================================== */
-            /* 👤 مسارات تطبيق المستخدمين (الرابط العادي) */
-            /* ========================================== */
-              <Routes>
-                {/* الصفحة الرئيسية للمستخدمين هي صفحة التثبيت الزرقاء */}
-                <Route path="/" element={<InstallPWA />} />
+              {/* 3. صفحة تسجيل الدخول الأصلية */}
+              <Route path="/login" element={<AdminLogin />} />
 
+              {/* --- الصفحات المحمية (تتطلب تسجيل دخول) --- */}
+              <Route element={<Layout />}>
                 {/* مسارات المستخدم العامة */}
-                <Route element={<Layout />}>
-                  <Route path="/home" element={<Home />} />
-                  <Route path="/recharge" element={<Recharge />} />
-                  <Route path="/orders" element={<Orders />} />
-                  <Route path="/instructions" element={<Instructions />} />
-                  <Route path="/promo-codes" element={<PromoCodes />} />
-                  <Route path="/contact-us" element={<ContactUs />} />
-                  <Route path="/mail" element={<Mail />} />
-                </Route>
+                <Route path="/home" element={<Home />} />
+                <Route path="recharge" element={<Recharge />} />
+                <Route path="orders" element={<Orders />} />
+                <Route path="instructions" element={<Instructions />} />
+                <Route path="promo-codes" element={<PromoCodes />} />
+                <Route path="contact-us" element={<ContactUs />} />
+                <Route path="mail" element={<Mail />} />
 
-                {/* أي رابط خاطئ في تطبيق المستخدم يعود للرئيسية */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            )}
+                {/* مسارات الإدارة (Dashboard) المحمية بـ adminOnly */}
+                <Route path="admin" element={<ProtectedRoute adminOnly><Dashboard /></ProtectedRoute>} />
+                <Route path="admin/products" element={<ProtectedRoute adminOnly><Products /></ProtectedRoute>} />
+                <Route path="admin/categories" element={<ProtectedRoute adminOnly><Categories /></ProtectedRoute>} />
+                <Route path="admin/recharges" element={<ProtectedRoute adminOnly><Recharges /></ProtectedRoute>} />
+                <Route path="admin/orders" element={<ProtectedRoute adminOnly><AdminOrders /></ProtectedRoute>} />
+                <Route path="admin/promo-codes" element={<ProtectedRoute adminOnly><AdminPromoCodes /></ProtectedRoute>} />
+                <Route path="admin/settings" element={<ProtectedRoute adminOnly><Settings /></ProtectedRoute>} />
+                <Route path="admin/messages" element={<ProtectedRoute adminOnly><Messages /></ProtectedRoute>} />
+                <Route path="admin/balance" element={<ProtectedRoute adminOnly><Balance /></ProtectedRoute>} />
+                <Route path="admin/users" element={<ProtectedRoute adminOnly><Users /></ProtectedRoute>} />
+              </Route>
 
+              {/* تحويل أي رابط خاطئ إلى الصفحة الرئيسية */}
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           </BrowserRouter>
         </CurrencyProvider>
       </NotificationProvider>

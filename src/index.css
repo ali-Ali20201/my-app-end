@@ -1,8 +1,1 @@
 @import "tailwindcss";
-
-@layer base {
-  html, body {
-    overscroll-behavior-y: none;
-    background-color: #f3f4f6; /* لون رمادي فاتح بدلاً من الأبيض ليكون مريحاً للعين */
-  }
-}

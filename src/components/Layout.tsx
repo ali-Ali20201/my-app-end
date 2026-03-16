@@ -20,8 +20,7 @@ import {
   Check,
   Users as UsersIcon,
   Pencil,
-  Smartphone,
-  Bell
+  Smartphone
 } from "lucide-react";
 
 import { useSocket } from "../hooks/useSocket";
@@ -40,7 +39,7 @@ export default function Layout() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
-  const [notifications, setNotifications] = useState({ orders: 0, recharges: 0 });
+  const [notifications, setNotifications] = useState({ orders: 0, recharges: 0, messages: 0 });
   const [copied, setCopied] = useState(false);
   const [pushSupported, setPushSupported] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
@@ -208,7 +207,11 @@ export default function Layout() {
       })
       .then((data) => {
         if (data && !data.error) {
-          setNotifications({ orders: data.orders, recharges: data.recharges });
+          setNotifications({ 
+            orders: data.orders || 0, 
+            recharges: data.recharges || 0, 
+            messages: data.messages || 0 
+          });
         }
       })
       .catch(console.error);
@@ -252,14 +255,14 @@ export default function Layout() {
         }
       });
 
-      socket.on('order_updated', (data?: { userId: number }) => {
-        if (!data || !data.userId || data.userId === user.id || user.role === 'admin') {
+      socket.on('order_updated', ({ userId }: { userId: number }) => {
+        if (userId === user.id || user.role === 'admin') {
           fetchNotifications();
         }
       });
 
-      socket.on('recharge_updated', (data?: { userId: number }) => {
-        if (!data || !data.userId || data.userId === user.id || user.role === 'admin') {
+      socket.on('recharge_updated', ({ userId }: { userId: number }) => {
+        if (userId === user.id || user.role === 'admin') {
           fetchNotifications();
         }
       });
@@ -328,7 +331,8 @@ export default function Layout() {
   ];
 
   const links = user.role === "admin" ? adminLinks : userLinks;
-  const totalNotifications = notifications.orders + notifications.recharges;
+  const totalMenuNotifications = notifications.orders + notifications.recharges + notifications.messages;
+  const totalMailNotifications = notifications.messages;
 
   const handleLogoutConfirm = () => {
     logout();
@@ -370,7 +374,7 @@ export default function Layout() {
                 className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:outline-none relative z-50"
               >
                 {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-                {!isMenuOpen && totalNotifications > 0 && (
+                {!isMenuOpen && totalMenuNotifications > 0 && (
                   <span className="absolute top-1 right-1 flex h-3 w-3">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border-2 border-white"></span>
@@ -382,11 +386,11 @@ export default function Layout() {
 
             {/* Balance Display (Left side in RTL) */}
             <div className="flex items-center space-x-3 space-x-reverse">
-              <Link to={user.role === 'admin' ? "/admin/orders" : "/orders"} className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors">
-                <Bell className="w-6 h-6" />
-                {totalNotifications > 0 && (
+              <Link to="/mail" className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors">
+                <Mail className="w-6 h-6" />
+                {totalMailNotifications > 0 && (
                   <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white border-2 border-white">
-                    {totalNotifications}
+                    {totalMailNotifications}
                   </span>
                 )}
               </Link>
