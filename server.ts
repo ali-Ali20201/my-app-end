@@ -264,53 +264,72 @@ app.get("/api/push/vapid-public-key", (req, res) => {
 async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }) {
   console.log(`[Email Debug] sendEmail called for: ${to}, subject: ${subject}`);
   
+  // 1. Try Brevo SMTP first
+  const brevoUser = process.env.BREVO_USER;
+  const brevoPass = process.env.BREVO_PASS;
+
+  if (brevoUser && brevoPass) {
+    console.log(`[Email Debug] Attempting to send email via Brevo SMTP to: ${to}`);
+    try {
+      const transporter = nodemailer.createTransport({
+        host: 'smtp-relay.brevo.com',
+        port: 587,
+        secure: false,
+        auth: {
+          user: brevoUser,
+          pass: brevoPass
+        }
+      });
+
+      const info = await transporter.sendMail({
+        from: `"Ali Cash" <${brevoUser}>`,
+        to,
+        subject,
+        text: text || "",
+        html: html || text
+      });
+
+      console.log(`[Email Debug] Email sent successfully via Brevo: ${info.messageId}`);
+      return info;
+    } catch (err) {
+      console.error("[Email Debug] Brevo SMTP Exception:", err);
+    }
+  }
+
+  // 2. Fallback to Gmail SMTP
+  console.log(`[Email Debug] Attempting to send email via Gmail SMTP to: ${to}`);
+  
   const emailUser = process.env.EMAIL_USER;
   const emailPass = process.env.EMAIL_PASS;
 
-  console.log(`[Email Debug] EMAIL_USER set: ${!!emailUser}, EMAIL_PASS set: ${!!emailPass}`);
+  if (emailUser && emailPass) {
+    try {
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: emailUser,
+          pass: emailPass
+        },
+        tls: { rejectUnauthorized: false }
+      });
 
-  if (!emailUser || !emailPass) {
-    throw new Error("لم يتم ضبط إعدادات البريد الإلكتروني (EMAIL_USER/EMAIL_PASS)");
-  }
+      const info = await transporter.sendMail({
+        from: `"Ali Cash" <${emailUser}>`,
+        to,
+        subject,
+        text: text || "",
+        html: html || text
+      });
 
-  try {
-    // Force Gmail SMTP settings for better compatibility
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: emailUser,
-        pass: emailPass
-      },
-      tls: {
-        rejectUnauthorized: false // Helps in some restricted environments
-      },
-      connectionTimeout: 15000, // 15 seconds
-      greetingTimeout: 15000,   // 15 seconds
-      socketTimeout: 15000      // 15 seconds
-    });
-
-    const info = await transporter.sendMail({
-      from: `"Ali Cash" <${emailUser}>`,
-      to,
-      subject,
-      text: text || "",
-      html: html || text
-    });
-
-    console.log(`[Email Debug] Email sent successfully via SMTP: ${info.messageId}`);
-    return info;
-  } catch (error: any) {
-    console.error("[Email Debug] SMTP Email Error:", error);
-    
-    let userMessage = error.message;
-    if (error.message.includes("535-5.7.8")) {
-      userMessage = "بيانات تسجيل الدخول غير صحيحة. يجب استخدام 'كلمة مرور التطبيقات' (App Password) الخاصة بـ Gmail وليس كلمة المرور العادية.";
-    } else if (error.message.includes("ETIMEDOUT") || error.message.includes("ECONNREFUSED")) {
-      userMessage = "فشل الاتصال بخادم البريد. قد يكون هناك حظر على منافذ الإرسال (SMTP Ports) في هذه البيئة.";
+      console.log(`[Email Debug] Email sent successfully via Gmail: ${info.messageId}`);
+      return info;
+    } catch (error: any) {
+      console.error("[Email Debug] Gmail SMTP Error:", error);
+      throw new Error(`فشل إرسال البريد: ${error.message}`);
     }
-    
-    throw new Error(`فشل إرسال البريد: ${userMessage}`);
   }
+
+  throw new Error("لم يتم ضبط إعدادات البريد الإلكتروني (BREVO_USER/BREVO_PASS أو EMAIL_USER/EMAIL_PASS)");
 }
 
 // Auth Routes
