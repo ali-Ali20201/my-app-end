@@ -264,72 +264,39 @@ app.get("/api/push/vapid-public-key", (req, res) => {
 async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }) {
   console.log(`[Email Debug] sendEmail called for: ${to}, subject: ${subject}`);
   
-  // 1. Try Brevo SMTP first
   const brevoUser = process.env.BREVO_USER;
   const brevoPass = process.env.BREVO_PASS;
 
-  if (brevoUser && brevoPass) {
-    console.log(`[Email Debug] Attempting to send email via Brevo SMTP to: ${to}`);
-    try {
-      const transporter = nodemailer.createTransport({
-        host: 'smtp-relay.brevo.com',
-        port: 587,
-        secure: false,
-        auth: {
-          user: brevoUser,
-          pass: brevoPass
-        }
-      });
-
-      const info = await transporter.sendMail({
-        from: `"Ali Cash" <${brevoUser}>`,
-        to,
-        subject,
-        text: text || "",
-        html: html || text
-      });
-
-      console.log(`[Email Debug] Email sent successfully via Brevo: ${info.messageId}`);
-      return info;
-    } catch (err) {
-      console.error("[Email Debug] Brevo SMTP Exception:", err);
-    }
+  if (!brevoUser || !brevoPass) {
+    throw new Error("لم يتم ضبط إعدادات Brevo (BREVO_USER/BREVO_PASS)");
   }
 
-  // 2. Fallback to Gmail SMTP
-  console.log(`[Email Debug] Attempting to send email via Gmail SMTP to: ${to}`);
-  
-  const emailUser = process.env.EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS;
+  console.log(`[Email Debug] Attempting to send email via Brevo SMTP to: ${to}`);
+  try {
+    const transporter = nodemailer.createTransport({
+      host: 'smtp-relay.brevo.com',
+      port: 587,
+      secure: false,
+      auth: {
+        user: brevoUser,
+        pass: brevoPass
+      }
+    });
 
-  if (emailUser && emailPass) {
-    try {
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          user: emailUser,
-          pass: emailPass
-        },
-        tls: { rejectUnauthorized: false }
-      });
+    const info = await transporter.sendMail({
+      from: `"Ali Cash" <${brevoUser}>`,
+      to,
+      subject,
+      text: text || "",
+      html: html || text
+    });
 
-      const info = await transporter.sendMail({
-        from: `"Ali Cash" <${emailUser}>`,
-        to,
-        subject,
-        text: text || "",
-        html: html || text
-      });
-
-      console.log(`[Email Debug] Email sent successfully via Gmail: ${info.messageId}`);
-      return info;
-    } catch (error: any) {
-      console.error("[Email Debug] Gmail SMTP Error:", error);
-      throw new Error(`فشل إرسال البريد: ${error.message}`);
-    }
+    console.log(`[Email Debug] Email sent successfully via Brevo: ${info.messageId}`);
+    return info;
+  } catch (err: any) {
+    console.error("[Email Debug] Brevo SMTP Exception:", err);
+    throw new Error(`فشل إرسال البريد عبر Brevo: ${err.message}`);
   }
-
-  throw new Error("لم يتم ضبط إعدادات البريد الإلكتروني (BREVO_USER/BREVO_PASS أو EMAIL_USER/EMAIL_PASS)");
 }
 
 // Auth Routes
