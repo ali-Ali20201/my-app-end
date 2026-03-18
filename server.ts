@@ -264,38 +264,36 @@ app.get("/api/push/vapid-public-key", (req, res) => {
 async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }) {
   console.log(`[Email Debug] sendEmail called for: ${to}, subject: ${subject}`);
   
-  const brevoUser = process.env.BREVO_USER;
-  const brevoPass = process.env.BREVO_PASS;
+  const user = process.env.EMAIL_USER;
+  const pass = process.env.EMAIL_PASS;
 
-  if (!brevoUser || !brevoPass) {
-    throw new Error("لم يتم ضبط إعدادات Brevo (BREVO_USER/BREVO_PASS)");
+  if (!user || !pass) {
+    throw new Error("لم يتم ضبط إعدادات البريد (EMAIL_USER/EMAIL_PASS)");
   }
 
-  console.log(`[Email Debug] Attempting to send email via Brevo SMTP to: ${to}`);
+  console.log(`[Email Debug] Attempting to send email via Gmail SMTP to: ${to}`);
   try {
     const transporter = nodemailer.createTransport({
-      host: 'smtp-relay.brevo.com',
-      port: 587,
-      secure: false,
+      service: 'gmail',
       auth: {
-        user: brevoUser,
-        pass: brevoPass
+        user: user,
+        pass: pass
       }
     });
 
     const info = await transporter.sendMail({
-      from: `"Ali Cash" <${brevoUser}>`,
+      from: `"Ali Cash" <${user}>`,
       to,
       subject,
       text: text || "",
       html: html || text
     });
 
-    console.log(`[Email Debug] Email sent successfully via Brevo: ${info.messageId}`);
+    console.log(`[Email Debug] Email sent successfully via Gmail: ${info.messageId}`);
     return info;
   } catch (err: any) {
-    console.error("[Email Debug] Brevo SMTP Exception:", err);
-    throw new Error(`فشل إرسال البريد عبر Brevo: ${err.message}`);
+    console.error("[Email Debug] Gmail SMTP Exception:", err);
+    throw new Error(`فشل إرسال البريد عبر Gmail: ${err.message}`);
   }
 }
 
@@ -518,8 +516,8 @@ app.post("/api/auth/forgot-password", asyncHandler(async (req: any, res: any) =>
 
   // Send Email
   try {
-    if (!process.env.EMAIL_USER) {
-      throw new Error("لم يتم إعداد مفتاح خدمة البريد (EMAIL_USER)");
+    if (!process.env.BREVO_USER || !process.env.BREVO_PASS) {
+      throw new Error("لم يتم إعداد مفتاح خدمة البريد (BREVO_USER/BREVO_PASS)");
     }
 
     await sendEmail({
@@ -584,8 +582,8 @@ app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => 
       .run(code, expires, user.id);
 
     // Send Email
-    if (!process.env.EMAIL_USER) {
-      throw new Error("لم يتم إعداد مفتاح خدمة البريد (EMAIL_USER)");
+    if (!process.env.BREVO_USER || !process.env.BREVO_PASS) {
+      throw new Error("لم يتم إعداد مفتاح خدمة البريد (BREVO_USER/BREVO_PASS)");
     }
 
     await sendEmail({
