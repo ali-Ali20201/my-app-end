@@ -33,8 +33,18 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="fixed inset-0 bg-[#b91c1c] z-[100] flex flex-col items-center justify-center p-8">
-      <img src="/admin-icon.png" alt="Admin App" className="w-40 mb-8" />
+    <div className="fixed inset-0 bg-gradient-to-b from-[#b91c1c] to-[#7f1d1d] z-[100] flex flex-col items-center justify-center p-8">
+      <img 
+        src="/app-icon-admin.png?v=8" 
+        alt="Admin App" 
+        referrerPolicy="no-referrer"
+        className="w-40 mb-8 drop-shadow-2xl" 
+        onError={(e) => {
+          const target = e.target as HTMLImageElement;
+          console.error("Admin Icon failed to load:", target.src);
+          target.src = 'https://picsum.photos/seed/admin/200/200';
+        }}
+      />
       <h1 className="text-white text-3xl font-bold mb-4">نسخة المدير الخاصة</h1>
       <button 
         onClick={() => alert("الآن يمكنك الضغط على خيارات المتصفح (الثلاث نقاط) واختيار 'إضافة إلى الشاشة الرئيسية' ليظهر التطبيق بأيقونته الحمراء!")}

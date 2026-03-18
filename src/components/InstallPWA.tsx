@@ -47,16 +47,22 @@ export default function InstallPWA() {
 
   return (
     /* الخلفية الزرقاء التي تغطي كامل الشاشة كما في الصورة */
-    <div className="fixed inset-0 bg-[#4f46e5] z-[100] flex flex-col items-center justify-center p-8 animate-in fade-in duration-500" dir="rtl">
+    <div className="fixed inset-0 bg-gradient-to-br from-[#059669] to-[#2563eb] z-[100] flex flex-col items-center justify-center p-8 animate-in fade-in duration-500" dir="rtl">
       
       <div className="flex flex-col items-center w-full max-w-sm text-center">
         
-        {/* المربع الذي يحتوي على أيقونة التطبيق (icon.png) */}
-        <div className="w-48 h-48 bg-white/10 backdrop-blur-sm rounded-[40px] shadow-2xl flex items-center justify-center mb-10 border border-white/20">
+        {/* المربع الذي يحتوي على أيقونة التطبيق (app-icon.png) */}
+        <div className="w-48 h-48 bg-white/20 backdrop-blur-md rounded-[40px] shadow-2xl flex items-center justify-center mb-10 border border-white/30">
           <img 
-            src="icon.png" 
+            src="/app-icon.png?v=8" 
             alt="Ali Cash Icon" 
-            className="w-32 h-32 object-contain"
+            referrerPolicy="no-referrer"
+            className="w-32 h-32 object-contain drop-shadow-xl"
+            onError={(e) => {
+              const target = e.target as HTMLImageElement;
+              console.error("Icon failed to load:", target.src);
+              target.src = 'https://picsum.photos/seed/alicash/200/200';
+            }}
           />
         </div>
 

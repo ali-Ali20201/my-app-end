@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from "react";
 import { Outlet, Link, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
@@ -43,6 +44,90 @@ export default function Layout() {
   const [copied, setCopied] = useState(false);
   const [pushSupported, setPushSupported] = useState(false);
   const [isSubscribed, setIsSubscribed] = useState(false);
+
+  const urlBase64ToUint8Array = (base64String: string) => {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+      .replace(/-/g, '+')
+      .replace(/_/g, '/');
+
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  };
+
+  useEffect(() => {
+    const requestNativePermission = async () => {
+      if (!user) return;
+
+      try {
+        const { Capacitor } = await import('@capacitor/core');
+        
+        // Native Platform (Android/iOS)
+        if (Capacitor.isNativePlatform()) {
+          const { PushNotifications } = await import('@capacitor/push-notifications');
+          let permStatus = await PushNotifications.checkPermissions();
+          
+          if (permStatus.receive === 'prompt') {
+            permStatus = await PushNotifications.requestPermissions();
+          }
+
+          if (permStatus.receive === 'granted') {
+            await PushNotifications.register();
+            setIsSubscribed(true);
+          }
+          return;
+        }
+
+        // Web Browser
+        if ('Notification' in window && 'serviceWorker' in navigator) {
+          if (Notification.permission === 'default') {
+            const permission = await Notification.requestPermission();
+            if (permission === 'granted') {
+              subscribeToWebPush();
+            }
+          } else if (Notification.permission === 'granted') {
+            subscribeToWebPush();
+          }
+        }
+      } catch (error) {
+        console.error("Error requesting notification permission:", error);
+      }
+    };
+
+    const subscribeToWebPush = async () => {
+      try {
+        const registration = await navigator.serviceWorker.ready;
+        const keyRes = await apiFetch('/api/push/vapid-public-key');
+        const { publicKey } = await keyRes.json();
+
+        if (!publicKey) return;
+
+        const subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+
+        await apiFetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: user.id,
+            subscription
+          })
+        });
+        setIsSubscribed(true);
+      } catch (err) {
+        console.error("Failed to subscribe to web push:", err);
+      }
+    };
+
+    requestNativePermission();
+  }, [user]);
 
   useEffect(() => {
     const checkPushStatus = async () => {
@@ -208,9 +293,9 @@ export default function Layout() {
       .then((data) => {
         if (data && !data.error) {
           setNotifications({ 
-            orders: data.orders || 0, 
-            recharges: data.recharges || 0, 
-            messages: data.messages || 0 
+            orders: data.orders, 
+            recharges: data.recharges,
+            messages: data.messages || 0
           });
         }
       })
@@ -267,12 +352,24 @@ export default function Layout() {
         }
       });
 
+      socket.on('new_message', ({ userId }: { userId: number }) => {
+        if (userId === user.id) {
+          fetchNotifications();
+        }
+      });
+
+      socket.on('new_global_message', () => {
+        fetchNotifications();
+      });
+
       return () => {
         socket.off('balance_updated');
         socket.off('order_created');
         socket.off('recharge_requested');
         socket.off('order_updated');
         socket.off('recharge_updated');
+        socket.off('new_message');
+        socket.off('new_global_message');
       };
     }
   }, [socket, user]);
@@ -325,14 +422,13 @@ export default function Layout() {
     { to: "/recharge", icon: <CreditCard className="w-5 h-5 ml-3" />, text: "شحن الرصيد" },
     { to: "/orders", icon: <ListOrdered className="w-5 h-5 ml-3" />, text: "طلباتي", badge: notifications.orders + notifications.recharges },
     { to: "/promo-codes", icon: <Gift className="w-5 h-5 ml-3" />, text: "أكواد الإحالة" },
-    { to: "/mail", icon: <Mail className="w-5 h-5 ml-3" />, text: "البريد" },
+    { to: "/mail", icon: <Mail className="w-5 h-5 ml-3" />, text: "البريد", badge: notifications.messages },
     { to: "/instructions", icon: <HelpCircle className="w-5 h-5 ml-3" />, text: "التعليمات" },
     { to: "/contact-us", icon: <Phone className="w-5 h-5 ml-3" />, text: "اتصل بنا" },
   ];
 
   const links = user.role === "admin" ? adminLinks : userLinks;
-  const totalMenuNotifications = notifications.orders + notifications.recharges + notifications.messages;
-  const totalMailNotifications = notifications.messages;
+  const totalNotifications = notifications.orders + notifications.recharges + notifications.messages;
 
   const handleLogoutConfirm = () => {
     logout();
@@ -374,7 +470,7 @@ export default function Layout() {
                 className="p-2 rounded-md text-gray-600 hover:text-gray-900 hover:bg-gray-100 focus:outline-none relative z-50"
               >
                 {isMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-                {!isMenuOpen && totalMenuNotifications > 0 && (
+                {!isMenuOpen && totalNotifications > 0 && (
                   <span className="absolute top-1 right-1 flex h-3 w-3">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                     <span className="relative inline-flex rounded-full h-3 w-3 bg-red-500 border-2 border-white"></span>
@@ -388,9 +484,9 @@ export default function Layout() {
             <div className="flex items-center space-x-3 space-x-reverse">
               <Link to="/mail" className="relative p-2 text-gray-600 hover:text-indigo-600 transition-colors">
                 <Mail className="w-6 h-6" />
-                {totalMailNotifications > 0 && (
+                {notifications.messages > 0 && (
                   <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white border-2 border-white">
-                    {totalMailNotifications}
+                    {notifications.messages}
                   </span>
                 )}
               </Link>

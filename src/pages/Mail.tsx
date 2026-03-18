@@ -30,13 +30,14 @@ export default function Mail() {
       .catch(console.error)
       .finally(() => setLoading(false));
 
-    // Mark notifications as read
+    // Mark messages as read
     apiFetch('/api/notifications/read', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: user.id })
+      body: JSON.stringify({ user_id: user.id, type: 'messages' })
     }).then(() => {
-      window.dispatchEvent(new Event('refreshNotifications'));
+      // Refresh notifications badge in layout
+      window.dispatchEvent(new CustomEvent('refreshNotifications'));
     }).catch(console.error);
   }, [user]);
 

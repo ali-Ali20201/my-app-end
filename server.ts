@@ -9,6 +9,7 @@ import multer from "multer";
 import fs from "fs";
 import bcrypt from "bcryptjs";
 import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import webpush from "web-push";
 import http from "http";
 import { Server } from "socket.io";
@@ -89,23 +90,21 @@ const db = {
     const client = transactionStorage.getStore() || pool;
     await client.query(query);
   },
-  transaction: (fn: Function) => {
-    return async (...args: any[]) => {
-      const client = await pool.connect();
-      return transactionStorage.run(client, async () => {
-        try {
-          await client.query("BEGIN");
-          const result = await fn(...args);
-          await client.query("COMMIT");
-          return result;
-        } catch (e) {
-          await client.query("ROLLBACK");
-          throw e;
-        } finally {
-          client.release();
-        }
-      });
-    };
+  transaction: async (fn: Function) => {
+    const client = await pool.connect();
+    return transactionStorage.run(client, async () => {
+      try {
+        await client.query("BEGIN");
+        const result = await fn();
+        await client.query("COMMIT");
+        return result;
+      } catch (e) {
+        await client.query("ROLLBACK");
+        throw e;
+      } finally {
+        client.release();
+      }
+    });
   },
 };
 
@@ -133,12 +132,6 @@ app.use((req, res, next) => {
   next();
 });
 
-// Telegram Webhook - Extremely permissive
-app.all("/api/telegram-webhook*", (req, res) => {
-  console.log(`[Telegram Debug] Webhook reached! URL: ${req.url}`);
-  res.status(200).send('OK');
-});
-
 // Async handler wrapper for Express routes
 const asyncHandler = (fn: any) => (req: any, res: any, next: any) => {
   Promise.resolve(fn(req, res, next)).catch((err) => {
@@ -154,6 +147,18 @@ const isValidId = (id: any): boolean => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0;
 };
+// Explicit routes for icons to ensure they are served correctly
+app.get("/app-icon.png", (req, res) => {
+  const iconPath = path.join(__dirname, "public", "app-icon.png");
+  console.log(`[Icon Debug] Serving app-icon.png from: ${iconPath}`);
+  res.sendFile(iconPath);
+});
+app.get("/app-icon-admin.png", (req, res) => {
+  const iconPath = path.join(__dirname, "public", "app-icon-admin.png");
+  console.log(`[Icon Debug] Serving app-icon-admin.png from: ${iconPath}`);
+  res.sendFile(iconPath);
+});
+
 // Test route
 app.get("/test", (req, res) => {
   res.send("Server is running!");
@@ -257,38 +262,128 @@ app.get("/api/push/vapid-public-key", (req, res) => {
 
 // Email Helper
 async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }) {
-  console.log(`[Email Debug] Attempting to send email to: ${to}`);
-  console.log(`[Email Debug] Subject: ${subject}`);
-  console.log(`[Email Debug] GMAIL_USER: ${process.env.GMAIL_USER}`);
+  console.log(`[Email Debug] sendEmail called for: ${to}, subject: ${subject}`);
+  const resendApiKey = process.env.RESEND_API_KEY;
+  
+  // Try Resend first if API key is available
+  if (resendApiKey) {
+    console.log(`[Email Debug] Attempting to send email via Resend to: ${to}`);
+    try {
+      const resend = new Resend(resendApiKey);
+      
+      // Add timeout for Resend
+      const resendPromise = resend.emails.send({
+        from: 'Ali Cash <onboarding@resend.dev>',
+        to: [to],
+        subject: subject,
+        text: text || "",
+        html: html || text || "",
+      });
 
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS) {
-    throw new Error("GMAIL_USER or GMAIL_PASS is not set in environment variables");
+      const timeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error("Resend Timeout")), 10000)
+      );
+
+      const { data, error } = await Promise.race([resendPromise, timeoutPromise]) as any;
+      
+      if (error) {
+        console.error("[Email Debug] Resend Error:", error);
+        // Fallback to SMTP if Resend fails
+      } else {
+        console.log(`[Email Debug] Email sent successfully via Resend: ${data?.id}`);
+        return data;
+      }
+    } catch (err) {
+      console.error("[Email Debug] Resend Exception:", err);
+      // Fallback to SMTP
+    }
   }
 
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_PASS,
-    },
-    connectionTimeout: 20000, 
-    greetingTimeout: 20000,
-    socketTimeout: 20000,
-  });
+  console.log(`[Email Debug] Attempting to send email via SMTP to: ${to}`);
+  
+  const emailUser = process.env.EMAIL_USER;
+  const emailPass = process.env.EMAIL_PASS;
+
+  console.log(`[Email Debug] EMAIL_USER set: ${!!emailUser}, EMAIL_PASS set: ${!!emailPass}`);
+
+  if (!emailUser || !emailPass) {
+    throw new Error("لم يتم ضبط إعدادات البريد الإلكتروني (EMAIL_USER/EMAIL_PASS)");
+  }
 
   try {
-    const info = await transporter.sendMail({
-      from: `"دعم علي كاش" <${process.env.GMAIL_USER}>`,
-      to,
-      subject,
-      text,
-      html,
-    });
-    console.log(`[Email Debug] Email sent successfully! Message ID: ${info.messageId}`);
+    let host = process.env.EMAIL_HOST;
+    
+    // Auto-detect host if not provided
+    if (!host) {
+      if (emailUser.toLowerCase().endsWith("@gmail.com")) {
+        host = "smtp.gmail.com";
+      } else if (emailUser.toLowerCase().endsWith("@outlook.com") || emailUser.toLowerCase().endsWith("@hotmail.com") || emailUser.toLowerCase().endsWith("@live.com")) {
+        host = "smtp.office365.com";
+      } else {
+        host = "smtp.office365.com"; // Default fallback
+      }
+    }
+
+    const isGmail = host.includes("gmail.com");
+    console.log(`[Email Debug] Using host: ${host}, isGmail: ${isGmail}`);
+    
+    // Try port 587 first as it is generally more open in cloud environments
+    const trySend = async (port: number, secure: boolean) => {
+      console.log(`[Email Debug] Trying SMTP on port: ${port}, secure: ${secure}`);
+      const transporter = nodemailer.createTransport({
+        host: host,
+        port: port,
+        secure: secure,
+        auth: {
+          user: emailUser,
+          pass: emailPass
+        },
+        tls: {
+          rejectUnauthorized: false,
+          minVersion: 'TLSv1.2'
+        },
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 15000
+      });
+
+      return await transporter.sendMail({
+        from: `"Ali Cash" <${emailUser}>`,
+        to,
+        subject,
+        text: text || "",
+        html: html || text
+      });
+    };
+
+    let info;
+    try {
+      // Try 587 first (Standard for STARTTLS)
+      info = await trySend(587, false);
+    } catch (err587: any) {
+      console.warn(`[Email Debug] Port 587 failed: ${err587.message}. Trying port 465...`);
+      try {
+        // Try 465 if 587 fails (Standard for SSL)
+        info = await trySend(465, true);
+      } catch (err465: any) {
+        console.error(`[Email Debug] Port 465 also failed: ${err465.message}`);
+        throw new Error(`فشل الاتصال بخادم البريد على المنافذ 587 و 465. تأكد من أن خادم البريد ${host} متاح.`);
+      }
+    }
+
+    console.log(`[Email Debug] Email sent successfully via SMTP: ${info.messageId}`);
     return info;
   } catch (error: any) {
-    console.error("[Email Debug] Nodemailer Error:", error);
-    throw new Error(`فشل الاتصال بـ Gmail: ${error.message}. تأكد من استخدام "كلمة مرور التطبيق" (App Password) من 16 حرفاً.`);
+    console.error("[Email Debug] SMTP Email Error:", error);
+    
+    let userMessage = error.message;
+    if (error.message.includes("535 5.7.139")) {
+      userMessage = "فشل المصادقة: قامت مايكروسوفت بتعطيل 'Basic Authentication'. يرجى التأكد من تفعيل 'SMTP AUTH' في إعدادات حسابك أو استخدام 'App Password' وإذا استمرت المشكلة يفضل استخدام بريد Gmail أو خدمة Resend.";
+    } else if (error.message.includes("Invalid login")) {
+      userMessage = "بيانات تسجيل الدخول غير صحيحة. يرجى التأكد من البريد وكلمة السر (أو كلمة سر التطبيق).";
+    }
+    
+    throw new Error(`فشل إرسال البريد: ${userMessage}`);
   }
 }
 
@@ -496,6 +591,7 @@ app.post("/api/auth/verify-login", asyncHandler(async (req: any, res: any) => {
 
 app.post("/api/auth/forgot-password", asyncHandler(async (req: any, res: any) => {
   const { email } = req.body;
+  console.log(`[Auth Debug] Forgot password request for: ${email}`);
   const user = (await db
     .prepare("SELECT * FROM users WHERE email = ?")
     .get(email)) as any;
@@ -508,25 +604,33 @@ app.post("/api/auth/forgot-password", asyncHandler(async (req: any, res: any) =>
     .prepare("UPDATE users SET reset_code = ?, reset_expires = ? WHERE id = ?")
     .run(resetCode, expires.toISOString(), user.id);
 
-  // Send Email (Fire and forget to prevent blocking)
-  sendEmail({
-    to: email,
-    subject: "كود إعادة تعيين كلمة السر",
-    html: `
-      <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
-        <h2 style="color: #4f46e5;">إعادة تعيين كلمة السر</h2>
-        <p style="font-size: 16px; color: #333;">لقد طلبت إعادة تعيين كلمة السر الخاصة بك.</p>
-        <p style="font-size: 16px; color: #333;">كود إعادة التعيين الخاص بك هو:</p>
-        <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
-          <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${resetCode}</h1>
+  // Send Email
+  try {
+    if (!process.env.EMAIL_USER) {
+      throw new Error("لم يتم إعداد مفتاح خدمة البريد (EMAIL_USER)");
+    }
+
+    await sendEmail({
+      to: email,
+      subject: "كود إعادة تعيين كلمة السر",
+      html: `
+        <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
+          <h2 style="color: #4f46e5;">إعادة تعيين كلمة السر</h2>
+          <p style="font-size: 16px; color: #333;">لقد طلبت إعادة تعيين كلمة السر الخاصة بك.</p>
+          <p style="font-size: 16px; color: #333;">كود إعادة التعيين الخاص بك هو:</p>
+          <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
+            <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${resetCode}</h1>
+          </div>
+          <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 15 دقيقة فقط.</p>
+          <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
         </div>
-        <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 15 دقيقة فقط.</p>
-        <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
-      </div>
-    `,
-  }).catch(err => console.error("Background email error:", err));
-  
-  res.json({ success: true });
+      `,
+    });
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Email error during forgot password:", err);
+    res.status(500).json({ error: `فشل في إرسال البريد الإلكتروني: ${err.message}` });
+  }
 }));
 
 app.post("/api/auth/reset-password", asyncHandler(async (req: any, res: any) => {
@@ -567,8 +671,12 @@ app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => 
       .prepare("UPDATE users SET reset_code = ?, reset_expires = ? WHERE id = ?")
       .run(code, expires, user.id);
 
-    // Send Email (Fire and forget to prevent blocking)
-    sendEmail({
+    // Send Email
+    if (!process.env.EMAIL_USER) {
+      throw new Error("لم يتم إعداد مفتاح خدمة البريد (EMAIL_USER)");
+    }
+
+    await sendEmail({
       to: email,
       subject: "كود التحقق لتعديل الملف الشخصي",
       html: `
@@ -583,7 +691,7 @@ app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => 
           <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
         </div>
       `,
-    }).catch(err => console.error("Background email error (edit code):", err));
+    });
     res.json({ success: true });
   } catch (err: any) {
     console.error("Send edit code error:", err);
@@ -883,40 +991,43 @@ app.get("/api/notifications/:userId", asyncHandler(async (req: any, res: any) =>
       .get(user.id)) as any;
     const messages = (await db
       .prepare(
-        "SELECT COUNT(*) as count FROM messages WHERE user_id = ? AND is_read = 0",
+        "SELECT COUNT(*) as count FROM messages WHERE (user_id = ? OR user_id IS NULL) AND is_read = FALSE",
       )
       .get(user.id)) as any;
-    res.json({ 
-      orders: orders.count, 
-      recharges: recharges.count, 
-      messages: messages.count 
-    });
+    res.json({ orders: orders.count, recharges: recharges.count, messages: messages.count });
   }
 }));
 
 app.post("/api/notifications/read", asyncHandler(async (req: any, res: any) => {
-  const { user_id } = req.body;
+  const { user_id, type } = req.body;
   if (!user_id) return res.status(400).json({ error: "Missing user_id" });
 
   const user = (await db
     .prepare("SELECT * FROM users WHERE id = ?")
     .get(user_id)) as any;
+  
   if (user && user.role !== "admin") {
-    await db
-      .prepare(
-        "UPDATE orders SET user_read = 1 WHERE user_id = ? AND status != 'pending'",
-      )
-      .run(user_id);
-    await db
-      .prepare(
-        "UPDATE recharge_requests SET user_read = 1 WHERE user_id = ? AND status != 'pending'",
-      )
-      .run(user_id);
-    await db
-      .prepare(
-        "UPDATE messages SET is_read = 1 WHERE user_id = ?",
-      )
-      .run(user_id);
+    if (!type || type === 'orders') {
+      await db
+        .prepare(
+          "UPDATE orders SET user_read = 1 WHERE user_id = ? AND status != 'pending'",
+        )
+        .run(user_id);
+    }
+    if (!type || type === 'recharges') {
+      await db
+        .prepare(
+          "UPDATE recharge_requests SET user_read = 1 WHERE user_id = ? AND status != 'pending'",
+        )
+        .run(user_id);
+    }
+    if (!type || type === 'messages') {
+      await db
+        .prepare(
+          "UPDATE messages SET is_read = TRUE WHERE user_id = ? OR user_id IS NULL",
+        )
+        .run(user_id);
+    }
   }
 
   res.json({ success: true });
@@ -975,12 +1086,14 @@ app.post("/api/admin/messages", asyncHandler(async (req: any, res: any) => {
     .prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
     .run(userId, title, content);
 
-  if (userId) {
-    sendPushNotification(userId, title, content);
-  } else {
-    // Notify all users
-    const users = await db.prepare("SELECT id FROM users").all() as any[];
-    users.forEach(u => sendPushNotification(u.id, title, content));
+  // Send Push Notification and Socket Event
+  const io = req.app.get("io");
+  if (targetType === "all") {
+    if (io) io.emit("new_global_message", { title });
+    // Sending push to all users might be heavy, but let's do it for specific if requested
+  } else if (userId) {
+    if (io) io.emit("new_message", { userId, title });
+    sendPushNotification(userId, "رسالة جديدة", title).catch(console.error);
   }
 
   res.json({ success: true });
@@ -1051,20 +1164,17 @@ app.post("/api/admin/balance", asyncHandler(async (req: any, res: any) => {
           amountInUserCurrency,
           user.preferred_currency,
         );
-    })();
+      
+      const title = "تحديث الرصيد";
+      const body = `تم تحديث رصيدك بمبلغ ${amountInUserCurrency} ${user.preferred_currency}. رصيدك الحالي هو ${newBalance} ${user.preferred_currency}.`;
+      sendPushNotification(Number(userId), title, body);
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(userId, title, body);
+    });
 
     const io = app.get("io");
     if (io)
       io.emit("balance_updated", { userId: parseInt(userId), newBalance });
-
-    const title = action === "add" ? "تم إضافة رصيد" : "تم سحب رصيد";
-    const body = action === "add" 
-      ? `قام المسؤول بإضافة ${amountInUserCurrency} ${user.preferred_currency} إلى حسابك.`
-      : `قام المسؤول بسحب ${amountInUserCurrency} ${user.preferred_currency} من حسابك.`;
-    
-    sendPushNotification(parseInt(userId), title, body);
-    await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-      .run(userId, title, body);
 
     res.json({ success: true, newBalance });
   } catch (err) {
@@ -1114,7 +1224,7 @@ app.delete("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
       
       // حذف المستخدم
       await db.prepare("DELETE FROM users WHERE id = ?").run(id);
-    })();
+    });
     res.json({ success: true });
   } catch (err: any) {
     console.error("Error deleting user:", err);
@@ -1283,6 +1393,8 @@ app.post("/api/products", asyncHandler(async (req: any, res: any) => {
       old_price,
       currency,
       profit_try,
+      has_quantity,
+      quantity,
     } = req.body;
     console.log("Adding product:", {
       name,
@@ -1292,10 +1404,12 @@ app.post("/api/products", asyncHandler(async (req: any, res: any) => {
       category_id,
       currency,
       profit_try,
+      has_quantity,
+      quantity,
     });
     const result = await db
       .prepare(
-        "INSERT INTO products (name, description, image_url, price, category_id, old_price, currency, profit_try) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO products (name, description, image_url, price, category_id, old_price, currency, profit_try, has_quantity, quantity) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       )
       .run(
         name,
@@ -1306,6 +1420,8 @@ app.post("/api/products", asyncHandler(async (req: any, res: any) => {
         old_price || null,
         currency || "$",
         profit_try || 0,
+        has_quantity || false,
+        quantity || 0,
       );
     console.log("Product added with ID:", result.lastInsertRowid);
     const io = app.get("io");
@@ -1329,10 +1445,12 @@ app.put("/api/products/:id", asyncHandler(async (req: any, res: any) => {
     old_price,
     currency,
     profit_try,
+    has_quantity,
+    quantity,
   } = req.body;
   await db
     .prepare(
-      "UPDATE products SET name = ?, description = ?, image_url = ?, price = ?, category_id = ?, old_price = ?, currency = ?, profit_try = ? WHERE id = ?",
+      "UPDATE products SET name = ?, description = ?, image_url = ?, price = ?, category_id = ?, old_price = ?, currency = ?, profit_try = ?, has_quantity = ?, quantity = ? WHERE id = ?",
     )
     .run(
       name,
@@ -1343,6 +1461,8 @@ app.put("/api/products/:id", asyncHandler(async (req: any, res: any) => {
       old_price || null,
       currency || "$",
       profit_try || 0,
+      has_quantity || false,
+      quantity || 0,
       req.params.id,
     );
   const io = app.get("io");
@@ -1359,7 +1479,7 @@ app.delete("/api/products/:id", asyncHandler(async (req: any, res: any) => {
       await db.prepare("DELETE FROM orders WHERE product_id = ?").run(req.params.id);
       // حذف المنتج
       await db.prepare("DELETE FROM products WHERE id = ?").run(req.params.id);
-    })();
+    });
     const io = app.get("io");
     if (io) io.emit("products_updated");
     res.json({ success: true });
@@ -1479,74 +1599,6 @@ app.put("/api/settings", asyncHandler(async (req: any, res: any) => {
   }
 }));
 
-// Telegram Notification Helper
-// Simple notification queue to handle rate limiting
-let notificationQueue = Promise.resolve();
-
-async function sendTelegramNotification(message: string, keyboard?: any, retries = 3) {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-
-  if (!token || !chatId) {
-    console.log("[Telegram Debug] Telegram credentials not set, skipping notification.");
-    return;
-  }
-
-  // Chain the notification to the queue
-  notificationQueue = notificationQueue.then(async () => {
-    for (let i = 0; i < retries; i++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
-      try {
-        const url = `https://api.telegram.org/bot${token}/sendMessage`;
-        const body: any = {
-          chat_id: chatId,
-          text: message,
-          parse_mode: "HTML"
-        };
-        if (keyboard) {
-          body.reply_markup = keyboard;
-        }
-        
-        const response = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        });
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          console.error(`[Telegram Debug] API error (attempt ${i + 1}):`, errorData);
-          if (errorData.error_code === 429) {
-            const retryAfter = (errorData.parameters?.retry_after || 5) * 1000;
-            console.log(`[Telegram Debug] Rate limited, retrying after ${retryAfter}ms`);
-            await new Promise(resolve => setTimeout(resolve, retryAfter));
-            continue; // Retry
-          }
-          throw new Error(`Telegram API error: ${response.statusText}`);
-        } else {
-          console.log("[Telegram Debug] Notification sent successfully");
-          return; // Success
-        }
-      } catch (error: any) {
-        clearTimeout(timeoutId);
-        if (error.name === 'AbortError') {
-          console.error(`[Telegram Debug] Request timed out (attempt ${i + 1})`);
-        } else {
-          console.error(`[Telegram Debug] Failed to send notification (attempt ${i + 1}):`, error);
-        }
-        if (i === retries - 1) throw error; // Rethrow on last attempt
-        await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
-      }
-    }
-  }).catch(err => {
-    console.error("[Telegram Debug] Notification queue error:", err);
-  });
-}
-
 // Recharge Requests
 app.post("/api/recharge", asyncHandler(async (req: any, res: any) => {
   const { user_id, transaction_number, amount, currency } = req.body;
@@ -1563,19 +1615,6 @@ app.post("/api/recharge", asyncHandler(async (req: any, res: any) => {
     io.emit("recharge_requested");
     sendPushToAdmins("طلب شحن جديد", "يوجد طلب شحن رصيد جديد بانتظار المراجعة");
   }
-
-  // Send Notification to Admin
-  const user = (await db.prepare("SELECT name, a_code FROM users WHERE id = ?").get(user_id)) as any;
-  const userName = user?.name || "غير معروف";
-  const userCode = user?.a_code || "غير معروف";
-  const message = `<b>طلب شحن جديد</b>\n\nالمستخدم: ${userName}\nالأيدي: <code>${userCode}</code>\nالمبلغ: ${amount} ${currency}\nالرقم: ${transaction_number}`;
-  const keyboard = {
-    inline_keyboard: [[
-      { text: "قبول", callback_data: `recharge_accept:${result.lastInsertRowid}:${user_id}` },
-      { text: "رفض", callback_data: `recharge_reject:${result.lastInsertRowid}:${user_id}` }
-    ]]
-  };
-  sendTelegramNotification(message, keyboard);
 
   res.json({ id: result.lastInsertRowid });
 }));
@@ -1650,15 +1689,6 @@ app.put("/api/recharge/:id", asyncHandler(async (req: any, res: any) => {
         .run(amountInUserCurrency, request.user_id);
       console.log(`[Recharge Action] Balance update result:`, balanceUpdate);
 
-      const title = status === "accepted" ? "تم قبول طلب الشحن" : "تعذر قبول طلب الشحن";
-      const body = status === "accepted"
-        ? `تم قبول طلب شحنك وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`
-        : `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}.`;
-
-      sendPushNotification(request.user_id, title, body);
-      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-        .run(request.user_id, title, body);
-
       const io = app.get("io");
       if (io) {
         const updatedUser = (await db
@@ -1669,8 +1699,18 @@ app.put("/api/recharge/:id", asyncHandler(async (req: any, res: any) => {
           newBalance: updatedUser.balance,
         });
       }
+
+      const title = "تم قبول طلب الشحن";
+      const body = `تم قبول طلب شحنك وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`;
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(request.user_id, title, body);
+    } else {
+      const title = "تعذر قبول طلب الشحن";
+      const body = `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}.`;
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(request.user_id, title, body);
     }
-  })();
+  });
 
   const io = app.get("io");
   if (io) {
@@ -1761,7 +1801,7 @@ app.delete("/api/promo-codes/:id", asyncHandler(async (req: any, res: any) => {
       await db
         .prepare("DELETE FROM promo_codes WHERE id = ?")
         .run(req.params.id);
-    })();
+    });
 
     const io = app.get("io");
     if (io) io.emit("promo_codes_updated");
@@ -1837,7 +1877,7 @@ app.post("/api/promo-codes/redeem", asyncHandler(async (req: any, res: any) => {
       
       // We need to return the amount in user's currency to display it correctly
       res.json({ success: true, type: "balance", amount: amountInUserCurrency });
-    })();
+    });
   } else if (promo.type === "discount") {
     // For discount codes, we just record that the user has "activated" it.
     // We might want to ensure they only have one active discount code of this type?
@@ -1945,6 +1985,10 @@ app.post("/api/orders", asyncHandler(async (req: any, res: any) => {
   if (!user || !product)
     return res.status(404).json({ error: "User or Product not found" });
 
+  if (product.has_quantity && product.quantity <= 0) {
+    return res.status(400).json({ error: "لقد نفد المنتج" });
+  }
+
   const rates = await getRates();
   const basePrice = product.currency === 'TRY' || product.currency === 'ل.ت'
     ? product.price + (product.profit_try || 0)
@@ -2014,6 +2058,14 @@ app.post("/api/orders", asyncHandler(async (req: any, res: any) => {
     await db
       .prepare("UPDATE users SET balance = balance - ? WHERE id = ?")
       .run(productPriceInUserCurrency, user_id);
+    
+    // Deduct quantity if applicable
+    if (product.has_quantity) {
+      await db
+        .prepare("UPDATE products SET quantity = quantity - 1 WHERE id = ?")
+        .run(product_id);
+    }
+
     // Create order
     const result = await db
       .prepare(
@@ -2021,7 +2073,7 @@ app.post("/api/orders", asyncHandler(async (req: any, res: any) => {
       )
       .run(user_id, product_id, phone_or_id, productPriceInUserCurrency);
     orderId = result.lastInsertRowid;
-  })();
+  });
 
   const io = app.get("io");
   if (io) {
@@ -2035,22 +2087,6 @@ app.post("/api/orders", asyncHandler(async (req: any, res: any) => {
     io.emit("order_created");
     sendPushToAdmins("طلب منتج جديد", "يوجد طلب شراء جديد بانتظار المراجعة");
   }
-
-  // Send Notification to Admin
-  const productInfo = (await db.prepare("SELECT name FROM products WHERE id = ?").get(product_id)) as any;
-  const userInfo = (await db.prepare("SELECT name, a_code FROM users WHERE id = ?").get(user_id)) as any;
-  const userName = userInfo?.name || "غير معروف";
-  const userCode = userInfo?.a_code || "غير معروف";
-  const productName = productInfo?.name || "منتج غير معروف";
-  
-  const message = `<b>طلب شراء جديد</b>\n\nالمستخدم: ${userName}\nالأيدي: <code>${userCode}</code>\nالمنتج: ${productName}\nالسعر: ${productPriceInUserCurrency} ${user.preferred_currency}`;
-  const keyboard = {
-    inline_keyboard: [[
-      { text: "قبول", callback_data: `order_accept:${orderId}:${user_id}` },
-      { text: "رفض", callback_data: `order_reject:${orderId}:${user_id}` }
-    ]]
-  };
-  sendTelegramNotification(message, keyboard);
 
   res.json({ success: true });
 }));
@@ -2126,21 +2162,23 @@ app.put("/api/orders/:id", asyncHandler(async (req: any, res: any) => {
         .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
         .run(order.paid_price || 0, order.user_id);
       console.log(`[Order Action] Refund result:`, refundResult);
+      
+      const title = "تعذر قبول طلب الشراء";
+      const body = `لقد تعذر قبول طلبك وتم استعادة المبلغ لرصيدك.`;
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(order.user_id, title, body);
+    } else {
+      const title = "تم قبول طلب الشراء";
+      const body = `تم قبول طلبك بنجاح! لقد وصلتك رسالة بريد بالتفاصيل.`;
+      await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
+        .run(order.user_id, title, body);
     }
-
-    const title = status === "accepted" ? "تم قبول طلب الشراء" : "تعذر قبول طلب الشراء";
-    const body = status === "accepted"
-      ? `تم قبول طلبك بنجاح! لقد وصلتك رسالة بريد بالتفاصيل.`
-      : `لقد تعذر قبول طلبك وتم استعادة المبلغ لرصيدك.`;
-
-    sendPushNotification(order.user_id, title, body);
-    await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-      .run(order.user_id, title, body);
-  })();
+  });
 
   const io = app.get("io");
   if (io) {
     io.emit("order_updated", { userId: order.user_id });
+    sendPushNotification(order.user_id, "تحديث حالة الطلب", `تم تحديث حالة طلبك إلى: ${status === 'accepted' ? 'مقبول' : 'مرفوض'}`);
     if (status === "rejected") {
       const updatedUser = (await db
         .prepare("SELECT balance FROM users WHERE id = ?")
@@ -2188,8 +2226,26 @@ async function startServer() {
           category_id INTEGER,
           currency TEXT DEFAULT '$',
           old_price REAL,
+          profit_try REAL DEFAULT 0,
+          has_quantity BOOLEAN DEFAULT FALSE,
+          quantity INTEGER DEFAULT 0,
           FOREIGN KEY(category_id) REFERENCES categories(id)
       );
+      
+      -- Add columns if they don't exist
+      DO $$ 
+      BEGIN 
+          BEGIN
+              ALTER TABLE products ADD COLUMN has_quantity BOOLEAN DEFAULT FALSE;
+          EXCEPTION
+              WHEN duplicate_column THEN null;
+          END;
+          BEGIN
+              ALTER TABLE products ADD COLUMN quantity INTEGER DEFAULT 0;
+          EXCEPTION
+              WHEN duplicate_column THEN null;
+          END;
+      END $$;
       CREATE TABLE IF NOT EXISTS recharge_requests (
           id SERIAL PRIMARY KEY,
           user_id INTEGER,
@@ -2244,16 +2300,6 @@ async function startServer() {
 
     dbInitialized = true;
     console.log("Database initialized successfully");
-
-    // One-time cleanup of recharge and purchase requests as requested by user
-    try {
-      console.log("[Cleanup] Deleting all recharge and purchase requests...");
-      await db.prepare("DELETE FROM orders").run();
-      await db.prepare("DELETE FROM recharge_requests").run();
-      console.log("[Cleanup] Done.");
-    } catch (e) {
-      console.error("[Cleanup] Error:", e);
-    }
 
     // Test connection
     try {
@@ -2466,7 +2512,7 @@ async function startServer() {
           user_id INTEGER,
           title TEXT,
           content TEXT,
-          is_read INTEGER DEFAULT 0,
+          is_read BOOLEAN DEFAULT FALSE,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY(user_id) REFERENCES users(id)
       );
@@ -2486,17 +2532,6 @@ async function startServer() {
   } catch (e) {
     console.error("Error creating push_subscriptions table:", e);
   }
-
-  try {
-    const tableInfo = (await db
-      .prepare(
-        "SELECT column_name as name FROM information_schema.columns WHERE table_name = 'messages'",
-      )
-      .all()) as any[];
-    if (!tableInfo.some((col) => col.name === "is_read")) {
-      await db.exec("ALTER TABLE messages ADD COLUMN is_read INTEGER DEFAULT 0;");
-    }
-  } catch (e) {}
 
   // Default settings
   try {
@@ -2584,20 +2619,6 @@ async function startServer() {
     res.json(uniqueUsers);
   });
 
-  // Clear all requests (Admin only)
-  app.post("/api/admin/clear-all-requests", asyncHandler(async (req: any, res: any) => {
-    await db.transaction(async () => {
-      await db.prepare("DELETE FROM orders").run();
-      await db.prepare("DELETE FROM recharge_requests").run();
-    });
-    const io = app.get("io");
-    if (io) {
-      io.emit("order_updated");
-      io.emit("recharge_updated");
-    }
-    res.json({ success: true, message: "تم حذف جميع طلبات الشحن والشراء بنجاح" });
-  }));
-
   // Error handling middleware
   app.use((err: any, req: any, res: any, next: any) => {
     const status = err.status || 500;
@@ -2613,132 +2634,6 @@ async function startServer() {
     }
     res.status(status).send(message);
   });
-
-  // Telegram Webhook
-  app.all("/api/telegram-webhook", asyncHandler(async (req: any, res: any) => {
-    console.log("[Telegram Debug] Webhook reached!");
-    const update = req.body;
-    if (update && update.callback_query) {
-      console.log("[Telegram Debug] Callback query received:", update.callback_query);
-      const { id, data, message } = update.callback_query;
-      const parts = data.split(":");
-      const action = parts[0];
-      const requestId = parts[1];
-      const userId = parts[2];
-      
-      if (action.startsWith("recharge_")) {
-        const status = action === "recharge_accept" ? "accepted" : "rejected";
-        
-        const request = (await db
-          .prepare("SELECT * FROM recharge_requests WHERE id = ?")
-          .get(requestId)) as any;
-          
-        console.log("[Telegram Debug] Recharge request found:", !!request, "Status:", request?.status);
-        if (request && request.status === "pending") {
-          await db.transaction(async () => {
-            await db
-              .prepare("UPDATE recharge_requests SET status = ? WHERE id = ?")
-              .run(status, requestId);
-            if (status === "accepted") {
-              const user = (await db
-                .prepare("SELECT preferred_currency FROM users WHERE id = ?")
-                .get(userId)) as any;
-              const rates = await getRates();
-              const amountInUserCurrency = convertCurrency(
-                request.amount,
-                request.currency,
-                user.preferred_currency,
-                rates,
-              );
-
-              await db
-                .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
-                .run(amountInUserCurrency, userId);
-              
-              // Notify user via push
-              sendPushNotification(Number(userId), "تم قبول طلب الشحن", `تم قبول طلب شحنك وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`);
-
-              // Also send an internal message
-              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-                .run(userId, "تم قبول شحن الرصيد", `تم قبول طلب شحنك بمبلغ ${request.amount} ${request.currency} وأضيف إلى حسابك ${amountInUserCurrency} ${user.preferred_currency}.`);
-            } else {
-              // Notify user via push
-              sendPushNotification(Number(userId), "تعذر قبول طلب الشحن", `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}.`);
-
-              // Also send an internal message
-              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-                .run(userId, "تعذر قبول شحن الرصيد", `لقد تعذر قبول طلب الشحن الخاص بك بمبلغ ${request.amount} ${request.currency}. يرجى التواصل مع الدعم للمزيد من التفاصيل.`);
-            }
-          });
-          
-          // Update Telegram message
-          const newText = message.text + `\n\n<b>تم ${status === "accepted" ? "القبول" : "الرفض"}</b>`;
-          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: message.chat.id,
-              message_id: message.message_id,
-              text: newText,
-              parse_mode: "HTML"
-            })
-          });
-        }
-      } else if (action.startsWith("order_")) {
-        const status = action === "order_accept" ? "accepted" : "rejected";
-        
-        const order = (await db
-          .prepare("SELECT * FROM orders WHERE id = ?")
-          .get(requestId)) as any;
-          
-        console.log("[Telegram Debug] Order found:", !!order, "Status:", order?.status);
-        if (order && order.status === "pending") {
-          await db.transaction(async () => {
-            await db
-              .prepare("UPDATE orders SET status = ? WHERE id = ?")
-              .run(status, requestId);
-              
-            if (status === "rejected") {
-              // Refund user
-              await db
-                .prepare("UPDATE users SET balance = balance + ? WHERE id = ?")
-                .run(order.paid_price || 0, userId);
-              
-              // Notify user via push
-              sendPushNotification(Number(userId), "تعذر قبول طلب الشراء", `لقد تعذر قبول طلبك وتم استعادة المبلغ لرصيدك.`);
-            } else {
-              // Notify user via push
-              sendPushNotification(Number(userId), "تم قبول طلب الشراء", `تم قبول طلبك بنجاح! لقد وصلتك رسالة بريد بالتفاصيل.`);
-              
-              // Also send an internal message
-              await db.prepare("INSERT INTO messages (user_id, title, content) VALUES (?, ?, ?)")
-                .run(userId, "تم قبول طلبك", `تم قبول طلبك للمنتج: ${order.product_name}. شكراً لتعاملك معنا.`);
-            }
-          });
-          
-          // Update Telegram message
-          const newText = message.text + `\n\n<b>تم ${status === "accepted" ? "القبول" : "الرفض"}</b>`;
-          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/editMessageText`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              chat_id: message.chat.id,
-              message_id: message.message_id,
-              text: newText,
-              parse_mode: "HTML"
-            })
-          });
-        }
-      }
-      
-      await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ callback_query_id: id })
-      });
-    }
-    res.sendStatus(200);
-  }));
 
   // Global Error Handler
   app.use((err: any, req: any, res: any, next: any) => {
@@ -2758,6 +2653,9 @@ async function startServer() {
 
   if (!isProd) {
     try {
+      // Serve public folder directly in dev mode as well
+      app.use(express.static(path.resolve(__dirname, "public")));
+      
       const vite = await createViteServer({
         server: { middlewareMode: true },
         appType: "spa",
@@ -2767,10 +2665,12 @@ async function startServer() {
       console.error("Failed to initialize Vite middleware:", e);
     }
   } else {
-    // 1. تحديد المسار الصحيح للمجلد
+  // 1. تحديد المسار الصحيح للمجلد
     const distPath = path.resolve(__dirname, "dist");
+    const publicPath = path.resolve(__dirname, "public");
     
-    // 2. خدمة ملفات الواجهة الأمامية
+    // 2. خدمة ملفات الواجهة الأمامية والملفات العامة
+    app.use(express.static(publicPath));
     app.use(express.static(distPath));
 
     // 3. توجيه جميع الطلبات (عدا الـ API) لملف index.html
@@ -2786,25 +2686,6 @@ async function startServer() {
   const PORT = process.env.PORT || 3000;
   server.listen(PORT as number, "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
-    
-    // Register Telegram Webhook
-    if (process.env.TELEGRAM_BOT_TOKEN) {
-      const botToken = process.env.TELEGRAM_BOT_TOKEN;
-      const appUrl = process.env.APP_URL;
-      if (appUrl) {
-        const webhookUrl = `${appUrl}/api/telegram-webhook`;
-        const url = `https://api.telegram.org/bot${botToken}/setWebhook`;
-        
-        fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: webhookUrl })
-        })
-        .then(res => res.json())
-        .then(data => console.log("Webhook registration:", data))
-        .catch(err => console.error("Failed to register webhook:", err));
-      }
-    }
   });
 }
 
