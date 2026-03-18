@@ -325,51 +325,30 @@ async function sendEmail({ to, subject, text, html }: { to: string; subject: str
     }
 
     const isGmail = host.includes("gmail.com");
-    console.log(`[Email Debug] Using host: ${host}, isGmail: ${isGmail}`);
     
-    // Try port 587 first as it is generally more open in cloud environments
-    const trySend = async (port: number, secure: boolean) => {
-      console.log(`[Email Debug] Trying SMTP on port: ${port}, secure: ${secure}`);
-      const transporter = nodemailer.createTransport({
-        host: host,
-        port: port,
-        secure: secure,
-        auth: {
-          user: emailUser,
-          pass: emailPass
-        },
-        tls: {
-          rejectUnauthorized: false,
-          minVersion: 'TLSv1.2'
-        },
-        connectionTimeout: 15000,
-        greetingTimeout: 15000,
-        socketTimeout: 15000
-      });
+    const transporter = nodemailer.createTransport({
+      host: host,
+      port: isGmail ? 465 : 587,
+      secure: isGmail, // true for 465, false for 587
+      auth: {
+        user: emailUser,
+        pass: emailPass
+      },
+      tls: {
+        rejectUnauthorized: false
+      },
+      connectionTimeout: 10000, // 10 seconds
+      greetingTimeout: 10000,   // 10 seconds
+      socketTimeout: 10000      // 10 seconds
+    });
 
-      return await transporter.sendMail({
-        from: `"Ali Cash" <${emailUser}>`,
-        to,
-        subject,
-        text: text || "",
-        html: html || text
-      });
-    };
-
-    let info;
-    try {
-      // Try 587 first (Standard for STARTTLS)
-      info = await trySend(587, false);
-    } catch (err587: any) {
-      console.warn(`[Email Debug] Port 587 failed: ${err587.message}. Trying port 465...`);
-      try {
-        // Try 465 if 587 fails (Standard for SSL)
-        info = await trySend(465, true);
-      } catch (err465: any) {
-        console.error(`[Email Debug] Port 465 also failed: ${err465.message}`);
-        throw new Error(`فشل الاتصال بخادم البريد على المنافذ 587 و 465. تأكد من أن خادم البريد ${host} متاح.`);
-      }
-    }
+    const info = await transporter.sendMail({
+      from: `"Ali Cash" <${emailUser}>`,
+      to,
+      subject,
+      text: text || "",
+      html: html || text
+    });
 
     console.log(`[Email Debug] Email sent successfully via SMTP: ${info.messageId}`);
     return info;
