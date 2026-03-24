@@ -78,11 +78,14 @@ export default function AdminPage() {
   };
 
   const isInstalling = new URLSearchParams(window.location.search).get('install') === 'true';
+  const isAdminApp = new URLSearchParams(window.location.search).get('app') === 'admin';
 
-  // إذا كان التطبيق مثبتاً بالفعل، نوجهه فوراً لصفحة المستخدمين
-  if (isStandalone) {
-    return <Navigate to="/home" replace />;
-  }
+  useEffect(() => {
+    // إذا تم فتح تطبيق الإدارة المثبت، نوجهه فوراً لصفحة المستخدمين كما طلب المستخدم
+    if (isStandalone && isAdminApp) {
+      navigate('/home', { replace: true });
+    }
+  }, [isStandalone, isAdminApp, navigate]);
 
   if (!isLogged) {
     return (
