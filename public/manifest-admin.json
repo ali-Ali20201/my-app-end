@@ -1,9 +1,9 @@
 {
-  "id": "ali-cash-admin-v2",
-  "name": "علي كاش ادمن",
-  "short_name": "علي كاش ادمن",
+  "id": "ali-cash-admin-v3-final",
+  "name": "مدير علي كاش",
+  "short_name": "مدير علي كاش",
   "description": "تطبيق التحكم الخاص بالإدارة",
-  "start_url": "/adminali20112024?app=admin",
+  "start_url": "/adminali20112024?app=admin&v=3",
   "scope": "/adminali20112024/",
   "display": "standalone",
   "background_color": "#b91c1c",
