@@ -78,8 +78,8 @@ export default function InstallPWA() {
     }
   };
 
-  // 3. إذا كان التطبيق مثبتاً، أو إذا كان الرابط هو رابط الأدمن، نوجهه فوراً ولا نظهر الشاشة الزرقاء
-  if (isStandalone || window.location.pathname === '/adminali20112024') {
+  // 3. إذا كان التطبيق مثبتاً، نوجهه فوراً لصفحة البداية
+  if (isStandalone) {
     return <Navigate to="/home" replace />;
   }
 
