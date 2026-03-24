@@ -11,10 +11,10 @@
     <script>
       var link = document.createElement('link');
       link.rel = 'manifest';
-      if (window.location.pathname.startsWith('/adminali20112024')) {
-        link.href = '/manifest-admin.json';
+      if (window.location.pathname.includes('adminali20112024')) {
+        link.href = '/manifest-admin.json?v=2';
       } else {
-        link.href = '/manifest-user.json';
+        link.href = '/manifest-user.json?v=2';
       }
       document.head.appendChild(link);
     </script>
