@@ -255,22 +255,34 @@ app.get("/api/push/vapid-public-key", (req, res) => {
 async function sendEmail({ to, subject, text, html }: { to: string; subject: string; text?: string; html?: string }) {
   console.log(`[Email Debug] sendEmail called for: ${to}, subject: ${subject}`);
   
-  const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_PASS;
+  // Force hardcoded values to completely rule out environment variable typos
+  const user = 'lyhajmry6@gmail.com';
+  const clientId = '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com';
+  const clientSecret = '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';
+  const refreshToken = '1//04A-uuAE9MVDrCgYIARAAGAQSNwF-L9IriIEK6Z8C4q1FlLsyXjlkN-L5UwRkJFjf9OCwQ43yv6qKcINXpJ_mi-ahyN0M3GpSces';
 
-  if (!user || !pass) {
-    throw new Error("لم يتم ضبط إعدادات البريد (EMAIL_USER/EMAIL_PASS)");
-  }
-
-  console.log(`[Email Debug] Attempting to send email via Gmail SMTP to: ${to}`);
+  console.log(`[Email Debug] Attempting to send email via Gmail to: ${to}`);
+  console.log(`[Email Debug] Using strict hardcoded credentials for ${user}`);
+  
   try {
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: user,
-        pass: pass
-      }
-    });
+    let transporter;
+    
+    // Use OAuth2 if Refresh Token is provided, otherwise fallback to App Password
+    if (refreshToken && clientId && clientSecret) {
+      console.log("[Email Debug] Using OAuth2 authentication method");
+      transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          type: 'OAuth2',
+          user: user,
+          clientId: clientId,
+          clientSecret: clientSecret,
+          refreshToken: refreshToken,
+        }
+      });
+    } else {
+      throw new Error("يجب توفير إما EMAIL_PASS أو (GMAIL_REFRESH_TOKEN مع GOOGLE_CLIENT_ID و GOOGLE_CLIENT_SECRET)");
+    }
 
     const info = await transporter.sendMail({
       from: `"Ali Cash" <${user}>`,
@@ -283,7 +295,7 @@ async function sendEmail({ to, subject, text, html }: { to: string; subject: str
     console.log(`[Email Debug] Email sent successfully via Gmail: ${info.messageId}`);
     return info;
   } catch (err: any) {
-    console.error("[Email Debug] Gmail SMTP Exception:", err);
+    console.error("[Email Debug] Gmail Exception:", err);
     throw new Error(`فشل إرسال البريد عبر Gmail: ${err.message}`);
   }
 }
@@ -297,7 +309,7 @@ app.get("/api/auth/google/url", (req, res) => {
   const redirectUri = `${origin}/api/auth/google/callback`;
   
   const params = new URLSearchParams({
-    client_id: '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
+    client_id: process.env.GOOGLE_CLIENT_ID || '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
     redirect_uri: redirectUri,
     response_type: 'code',
     scope: 'openid email profile',
@@ -318,8 +330,8 @@ app.get("/api/auth/google/callback", asyncHandler(async (req: any, res: any) => 
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
-      client_secret: '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',
+      client_id: process.env.GOOGLE_CLIENT_ID || '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
+      client_secret: process.env.GOOGLE_CLIENT_SECRET || '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',
       code: code as string,
       grant_type: "authorization_code",
       redirect_uri: redirectUri

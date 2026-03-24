@@ -129,6 +129,29 @@ export default function Auth() {
     }
   };
 
+  const handleResendCode = async () => {
+    setError("");
+    setMessage("");
+    setLoading(true);
+    try {
+      const res = await apiFetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok) {
+        setMessage("تم إعادة إرسال كود التحقق إلى بريدك الإلكتروني");
+      } else {
+        setError(data?.error || "حدث خطأ غير متوقع");
+      }
+    } catch (err) {
+      setError("حدث خطأ في الاتصال بالخادم");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
@@ -267,8 +290,27 @@ export default function Auth() {
         <h2 className="text-2xl font-bold mb-6 text-center">تعيين كلمة سر جديدة</h2>
         
         {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>}
+        {message && <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg text-sm">{message}</div>}
         
         <form onSubmit={handleReset} className="space-y-4">
+          <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
+            <div className="flex items-center text-gray-700 overflow-hidden">
+              <Mail className="w-5 h-5 ml-2 text-gray-400 flex-shrink-0" />
+              <span dir="ltr" className="text-sm font-medium truncate">{email}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowReset(false);
+                setShowForgot(true);
+                setMessage("");
+                setError("");
+              }}
+              className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline font-bold mr-2 flex-shrink-0"
+            >
+              تعديل
+            </button>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">كود التحقق</label>
             <div className="relative">
@@ -315,16 +357,28 @@ export default function Auth() {
           >
             {loading ? "جاري التغيير..." : "تغيير كلمة السر"}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowReset(false);
-              setError("");
-            }}
-            className="w-full text-sm text-indigo-600 hover:underline mt-4"
-          >
-            العودة لتسجيل الدخول
-          </button>
+          
+          <div className="flex flex-col space-y-3 mt-4 pt-4 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={handleResendCode}
+              disabled={loading}
+              className="w-full text-sm text-indigo-600 font-medium hover:underline disabled:opacity-50"
+            >
+              إعادة إرسال الرمز
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowReset(false);
+                setError("");
+                setMessage("");
+              }}
+              className="w-full text-sm text-gray-500 hover:text-gray-700 hover:underline"
+            >
+              العودة لتسجيل الدخول
+            </button>
+          </div>
         </form>
       </div>
     );
