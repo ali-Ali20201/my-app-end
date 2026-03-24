@@ -117,6 +117,7 @@ const upload = multer({
 
 // Initialize DB
 const app = express();
+app.set('trust proxy', 1); // Trust proxy to get correct protocol (https) behind reverse proxies
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -147,17 +148,7 @@ const isValidId = (id: any): boolean => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0;
 };
-// Explicit routes for icons to ensure they are served correctly
-app.get("/app-icon.png", (req, res) => {
-  const iconPath = path.join(__dirname, "public", "app-icon.png");
-  console.log(`[Icon Debug] Serving app-icon.png from: ${iconPath}`);
-  res.sendFile(iconPath);
-});
-app.get("/app-icon-admin.png", (req, res) => {
-  const iconPath = path.join(__dirname, "public", "app-icon-admin.png");
-  console.log(`[Icon Debug] Serving app-icon-admin.png from: ${iconPath}`);
-  res.sendFile(iconPath);
-});
+// Explicit routes for icons removed to let express.static handle them from dist/public
 
 // Test route
 app.get("/test", (req, res) => {
@@ -296,6 +287,90 @@ async function sendEmail({ to, subject, text, html }: { to: string; subject: str
     throw new Error(`فشل إرسال البريد عبر Gmail: ${err.message}`);
   }
 }
+
+// Google OAuth Routes
+app.get("/api/auth/google/url", (req, res) => {
+  const clientOrigin = req.query.origin as string;
+  const host = req.get('host');
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  const origin = clientOrigin || req.headers.origin || `${protocol}://${host}`;
+  const redirectUri = `${origin}/api/auth/google/callback`;
+  
+  const params = new URLSearchParams({
+    client_id: '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
+    redirect_uri: redirectUri,
+    response_type: 'code',
+    scope: 'openid email profile',
+    access_type: 'offline',
+    state: redirectUri // Pass redirectUri in state to ensure exact match in callback
+  });
+  res.json({ url: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
+});
+
+app.get("/api/auth/google/callback", asyncHandler(async (req: any, res: any) => {
+  const { code, state } = req.query;
+  if (!code) return res.status(400).send("No code provided");
+  
+  // Use the exact redirectUri that was sent in the initial request
+  const redirectUri = (state as string) || `${req.headers['x-forwarded-proto'] || req.protocol}://${req.get('host')}/api/auth/google/callback`;
+  
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: '381816220626-3jijca38nfgt95tfe74kodftd61po07m.apps.googleusercontent.com',
+      client_secret: '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',
+      code: code as string,
+      grant_type: "authorization_code",
+      redirect_uri: redirectUri
+    })
+  });
+  
+  const tokenData = await tokenResponse.json();
+  if (!tokenResponse.ok) {
+    console.error("Google token error:", tokenData);
+    return res.status(400).send("Failed to get token");
+  }
+  
+  const userResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+    headers: { Authorization: `Bearer ${tokenData.access_token}` }
+  });
+  
+  const userData = await userResponse.json();
+  if (!userResponse.ok) {
+    console.error("Google user error:", userData);
+    return res.status(400).send("Failed to get user info");
+  }
+  
+  const { email, name } = userData;
+  
+  let user = await db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  if (!user) {
+    const aCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const randomPassword = await bcrypt.hash(Math.random().toString(36), 10);
+    const adminEmails = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.split(",").map((e: string) => e.trim()) : [];
+    const role = adminEmails.includes(email) ? "admin" : "user";
+    
+    await db.prepare("INSERT INTO users (name, email, password, a_code, role) VALUES (?, ?, ?, ?, ?)").run(name, email, randomPassword, aCode, role);
+    user = await db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  }
+  
+  res.send(`
+    <html>
+      <body>
+        <script>
+          if (window.opener) {
+            window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', user: ${JSON.stringify({ id: user.id, name: user.name, email: user.email, role: user.role, a_code: user.a_code, balance: user.balance, preferred_currency: user.preferred_currency })} }, '*');
+            window.close();
+          } else {
+            window.location.href = '/';
+          }
+        </script>
+        <p>تم تسجيل الدخول بنجاح. سيتم إغلاق هذه النافذة تلقائياً.</p>
+      </body>
+    </html>
+  `);
+}));
 
 // Auth Routes
 app.post("/api/auth/register", asyncHandler(async (req: any, res: any) => {
