@@ -57,6 +57,7 @@ export default function InstallPWA() {
             src="/app-icon.png" 
             alt="Ali Cash Icon" 
             className="w-32 h-32 object-contain"
+            referrerPolicy="no-referrer"
           />
         </div>
 
