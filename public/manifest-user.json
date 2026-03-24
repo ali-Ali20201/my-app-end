@@ -9,19 +9,19 @@
   "theme_color": "#4f46e5",
   "icons": [
     {
-      "src": "/app-icon.png",
+      "src": "/cash-on-delivery (1).png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon.png",
+      "src": "/cash-on-delivery.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/app-icon.png",
+      "src": "/cash-on-delivery.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
