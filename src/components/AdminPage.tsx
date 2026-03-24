@@ -1,10 +1,67 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function AdminPage() {
   const [password, setPassword] = useState('');
   const [isLogged, setIsLogged] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
-  // تم حذف الـ useEffect القديم لأن المتصفح الآن يختار المانيفست الصحيح من ملف index.html مباشرة
+  useEffect(() => {
+    // التحقق مما إذا كان الحدث قد تم التقاطه بالفعل في index.html
+    if ((window as any).deferredPrompt) {
+      setDeferredPrompt((window as any).deferredPrompt);
+    }
+
+    const handler = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      (window as any).deferredPrompt = e;
+    };
+
+    window.addEventListener('beforeinstallprompt', handler);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+    };
+  }, []);
+
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('install') === 'true' && deferredPrompt) {
+      // محاولة التثبيت التلقائي عند توفر الحدث (قد تتطلب نقرة من المستخدم في بعض المتصفحات)
+      handleInstall();
+    }
+  }, [deferredPrompt]);
+
+  const handleInstall = async () => {
+    const promptEvent = deferredPrompt || (window as any).deferredPrompt;
+    
+    if (promptEvent) {
+      try {
+        await promptEvent.prompt();
+        const { outcome } = await promptEvent.userChoice;
+        console.log(`User response: ${outcome}`);
+        if (outcome === 'accepted') {
+          setDeferredPrompt(null);
+          (window as any).deferredPrompt = null;
+        }
+      } catch (err) {
+        console.error("Installation prompt error:", err);
+      }
+    } else {
+      // التحقق مما إذا كان التطبيق يعمل داخل iframe (معاينة AI Studio)
+      const isInIframe = window.self !== window.top;
+      
+      if (isInIframe) {
+        // فتح التطبيق في علامة تبويب جديدة خارج الـ iframe لتمكين التثبيت
+        const url = new URL(window.location.href);
+        url.searchParams.set('install', 'true');
+        window.open(url.toString(), '_blank');
+      } else {
+        // إذا كان خارج الـ iframe وما زال لا يعمل، نظهر الرسالة الإرشادية
+        alert("الآن يمكنك الضغط على خيارات المتصفح (الثلاث نقاط) واختيار 'إضافة إلى الشاشة الرئيسية' ليظهر التطبيق بأيقونته الحمراء!");
+      }
+    }
+  };
 
   const checkPassword = () => {
     if (password === 'fadiali1985$') {
@@ -13,6 +70,8 @@ export default function AdminPage() {
       alert('كلمة المرور خاطئة!');
     }
   };
+
+  const isInstalling = new URLSearchParams(window.location.search).get('install') === 'true';
 
   if (!isLogged) {
     return (
@@ -34,6 +93,11 @@ export default function AdminPage() {
 
   return (
     <div className="fixed inset-0 bg-gradient-to-b from-[#b91c1c] to-[#7f1d1d] z-[100] flex flex-col items-center justify-center p-8">
+      {isInstalling && (
+        <div className="bg-white/20 backdrop-blur-md text-white p-4 rounded-xl mb-6 text-sm border border-white/30 animate-pulse text-center">
+          جاري تجهيز تثبيت نسخة الإدارة... يرجى الضغط على الزر أدناه إذا لم تظهر نافذة التثبيت تلقائياً.
+        </div>
+      )}
       <img 
         src="/app-icon-admin.png?v=8" 
         alt="Admin App" 
@@ -47,7 +111,7 @@ export default function AdminPage() {
       />
       <h1 className="text-white text-3xl font-bold mb-4">نسخة المدير الخاصة</h1>
       <button 
-        onClick={() => alert("الآن يمكنك الضغط على خيارات المتصفح (الثلاث نقاط) واختيار 'إضافة إلى الشاشة الرئيسية' ليظهر التطبيق بأيقونته الحمراء!")}
+        onClick={handleInstall}
         className="bg-white text-[#b91c1c] px-10 py-4 rounded-2xl font-bold text-xl hover:bg-gray-100 transition-all"
       >
         تثبيت تطبيق الإدارة

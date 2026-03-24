@@ -7,6 +7,7 @@ export default function Settings() {
   const socket = useSocket();
   const [rechargeText, setRechargeText] = useState("");
   const [rechargeImage, setRechargeImage] = useState("");
+  const [mainLogo, setMainLogo] = useState("");
   const [instructionsText, setInstructionsText] = useState("");
   const [contactUsText, setContactUsText] = useState("");
   const [whatsappLink, setWhatsappLink] = useState("");
@@ -35,6 +36,7 @@ export default function Settings() {
       .then((data) => {
         setRechargeText(data.recharge_text || "");
         setRechargeImage(data.recharge_image || "");
+        setMainLogo(data.main_logo || "");
         setInstructionsText(data.instructions_text || "");
         setContactUsText(data.contact_us_text || "");
         setWhatsappLink(data.whatsapp_link || "");
@@ -64,7 +66,7 @@ export default function Settings() {
     }
   }, [socket]);
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'recharge' | 'logo') => {
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -73,11 +75,12 @@ export default function Settings() {
     formData.append("image", file);
 
     try {
-      if (rechargeImage) {
+      const currentImage = type === 'recharge' ? rechargeImage : mainLogo;
+      if (currentImage) {
         await apiFetch("/api/upload", {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url: rechargeImage }),
+          body: JSON.stringify({ url: currentImage }),
         }).catch(console.error);
       }
 
@@ -87,7 +90,11 @@ export default function Settings() {
       });
       const data = await res.json();
       if (res.ok) {
-        setRechargeImage(data.url);
+        if (type === 'recharge') {
+          setRechargeImage(data.url);
+        } else {
+          setMainLogo(data.url);
+        }
       } else {
         setMessage("فشل رفع الصورة");
       }
@@ -109,6 +116,7 @@ export default function Settings() {
         body: JSON.stringify({
           recharge_text: rechargeText,
           recharge_image: rechargeImage,
+          main_logo: mainLogo,
           instructions_text: instructionsText,
           contact_us_text: contactUsText,
           whatsapp_link: whatsappLink,
@@ -146,6 +154,123 @@ export default function Settings() {
         </h1>
 
         <form onSubmit={handleSubmit} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                شعار التطبيق الرئيسي (Logo)
+              </label>
+              <div className="flex flex-col space-y-4">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'logo')}
+                  className="hidden"
+                  id="main-logo-upload"
+                />
+                <label
+                  htmlFor="main-logo-upload"
+                  className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  <Upload className="w-4 h-4 ml-2" />
+                  {isUploading ? "جاري الرفع..." : "رفع شعار جديد"}
+                </label>
+                {mainLogo && (
+                  <div className="relative inline-block w-fit">
+                    <img
+                      src={mainLogo}
+                      alt="Main Logo"
+                      className="h-20 w-20 object-contain rounded-lg border bg-gray-50 p-2"
+                      referrerPolicy="no-referrer"
+                      onError={(e) =>
+                        ((e.target as HTMLImageElement).src =
+                          "https://picsum.photos/seed/logo/200/200")
+                      }
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const oldImage = mainLogo;
+                        setMainLogo("");
+                        try {
+                          if (oldImage) {
+                            await apiFetch("/api/upload", {
+                              method: "DELETE",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ url: oldImage }),
+                            });
+                          }
+                          // Settings will be saved on next "Save" click or we can save now
+                        } catch (err) {
+                          console.error(err);
+                        }
+                      }}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-sm"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                صورة صفحة الشحن
+              </label>
+              <div className="flex flex-col space-y-4">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e, 'recharge')}
+                  className="hidden"
+                  id="recharge-image-upload"
+                />
+                <label
+                  htmlFor="recharge-image-upload"
+                  className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
+                >
+                  <Upload className="w-4 h-4 ml-2" />
+                  {isUploading ? "جاري الرفع..." : "رفع صورة شحن"}
+                </label>
+                {rechargeImage && (
+                  <div className="relative inline-block w-fit">
+                    <img
+                      src={rechargeImage}
+                      alt="Recharge Preview"
+                      className="h-20 w-40 object-contain rounded-lg border bg-gray-50"
+                      referrerPolicy="no-referrer"
+                      onError={(e) =>
+                        ((e.target as HTMLImageElement).src =
+                          "https://picsum.photos/seed/err/200/100")
+                      }
+                    />
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const oldImage = rechargeImage;
+                        setRechargeImage("");
+                        try {
+                          if (oldImage) {
+                            await apiFetch("/api/upload", {
+                              method: "DELETE",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ url: oldImage }),
+                            });
+                          }
+                        } catch (err) {
+                          console.error(err);
+                        }
+                      }}
+                      className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-sm"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               النص المعروض في صفحة الشحن
@@ -158,84 +283,6 @@ export default function Settings() {
               className="w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-3 border"
               placeholder="أدخل النص الذي سيظهر للمستخدمين في صفحة شحن الرصيد..."
             />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              صورة صفحة الشحن
-            </label>
-            <div className="flex items-center space-x-4 space-x-reverse">
-              <input
-                type="file"
-                accept="image/*"
-                ref={fileInputRef}
-                onChange={handleImageUpload}
-                className="hidden"
-                id="recharge-image-upload"
-              />
-              <label
-                htmlFor="recharge-image-upload"
-                className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                <Upload className="w-4 h-4 ml-2" />
-                {isUploading ? "جاري الرفع..." : "اختر صورة من الجهاز"}
-              </label>
-              {rechargeImage && (
-                <div className="relative">
-                  <img
-                    src={rechargeImage}
-                    alt="Preview"
-                    className="h-20 w-40 object-contain rounded-lg border bg-gray-50"
-                    referrerPolicy="no-referrer"
-                    onError={(e) =>
-                      ((e.target as HTMLImageElement).src =
-                        "https://picsum.photos/seed/err/200/100")
-                    }
-                  />
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const oldImage = rechargeImage;
-                      setRechargeImage("");
-                      try {
-                        if (oldImage) {
-                          await apiFetch("/api/upload", {
-                            method: "DELETE",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ url: oldImage }),
-                          });
-                        }
-                        await apiFetch("/api/settings", {
-                          method: "PUT",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({
-                            recharge_text: rechargeText,
-                            recharge_image: "",
-                            instructions_text: instructionsText,
-                            contact_us_text: contactUsText,
-                            whatsapp_link: whatsappLink,
-                            contact_us_button_text: contactUsButtonText,
-                            contact_us_button_link: contactUsButtonLink,
-                            contact_us_button_text2: contactUsButtonText2,
-                            contact_us_button_link2: contactUsButtonLink2,
-                            app_paused: appPaused,
-                            app_paused_message: appPausedMessage,
-                            syp_rate: sypRate,
-                            try_rate: tryRate,
-                          }),
-                        });
-                        setMessage("تم حذف الصورة بنجاح");
-                      } catch (err) {
-                        console.error(err);
-                      }
-                    }}
-                    className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-1 shadow-sm"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
 
           <div className="pt-6 border-t border-gray-200">

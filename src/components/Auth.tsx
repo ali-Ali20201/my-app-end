@@ -23,6 +23,18 @@ export default function Auth() {
   const [loading, setLoading] = useState(false);
   const [whatsappLink, setWhatsappLink] = useState("");
 
+  const sanitizeIdentifier = (val: string) => {
+    if (!val) return val;
+    const trimmed = val.trim();
+    if (trimmed.includes("@")) return trimmed; // Email
+    
+    // Phone number sanitization
+    let sanitized = trimmed.replace(/\s+/g, ''); // Remove all spaces
+    if (sanitized.startsWith('+')) sanitized = sanitized.slice(1); // Remove leading +
+    if (sanitized.startsWith('00')) sanitized = sanitized.slice(2); // Remove leading 00
+    return sanitized;
+  };
+
   useEffect(() => {
     // Check if we should show push prompt
     const checkPushPrompt = async () => {
@@ -85,16 +97,22 @@ export default function Auth() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
       if (isLogin) {
-        const res = await login(email, password);
+        const res = await login(sanitizedEmail, password);
         if (res && res.require_code) {
           setShowVerifyLogin(true);
-          setMessage("تم إرسال كود التحقق إلى بريدك الإلكتروني");
+          setMessage("تم إرسال كود التحقق إلى بريدك الإلكتروني أو رقم هاتفك");
           return;
         }
       } else {
-        await register(name, email, password);
+        const res = await register(name, sanitizedEmail, password);
+        if (res && res.require_code) {
+          setShowVerifyLogin(true);
+          setMessage("تم إرسال كود التحقق إلى بريدك الإلكتروني أو رقم هاتفك");
+          return;
+        }
       }
     } catch (err: any) {
       setError(err.message);
@@ -108,15 +126,16 @@ export default function Auth() {
     setError("");
     setMessage("");
     setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
       const res = await apiFetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ emailOrPhone: sanitizedEmail }),
       });
       const data = await res.json().catch(() => null);
       if (res.ok) {
-        setMessage("تم إرسال كود التحقق إلى بريدك الإلكتروني");
+        setMessage("تم إرسال كود التحقق إلى بريدك الإلكتروني أو رقم هاتفك");
         setShowForgot(false);
         setShowReset(true);
       } else {
@@ -133,15 +152,16 @@ export default function Auth() {
     setError("");
     setMessage("");
     setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
       const res = await apiFetch("/api/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
+        body: JSON.stringify({ emailOrPhone: sanitizedEmail }),
       });
       const data = await res.json().catch(() => null);
       if (res.ok) {
-        setMessage("تم إعادة إرسال كود التحقق إلى بريدك الإلكتروني");
+        setMessage("تم إعادة إرسال كود التحقق إلى بريدك الإلكتروني أو رقم هاتفك");
       } else {
         setError(data?.error || "حدث خطأ غير متوقع");
       }
@@ -157,11 +177,12 @@ export default function Auth() {
     setError("");
     setMessage("");
     setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
       const res = await apiFetch("/api/auth/reset-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, code, newPassword }),
+        body: JSON.stringify({ emailOrPhone: sanitizedEmail, code, newPassword }),
       });
       const data = await res.json().catch(() => ({ error: "حدث خطأ في الاتصال" }));
       if (res.ok) {
@@ -182,8 +203,24 @@ export default function Auth() {
     e.preventDefault();
     setError("");
     setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
-      await verifyLogin(email, code);
+      await verifyLogin(sanitizedEmail, code);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendLoginCode = async () => {
+    setError("");
+    setMessage("");
+    setLoading(true);
+    const sanitizedEmail = sanitizeIdentifier(email);
+    try {
+      await login(sanitizedEmail, password);
+      setMessage("تم إعادة إرسال كود التحقق");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -194,13 +231,32 @@ export default function Auth() {
   if (showVerifyLogin) {
     return (
       <div className="max-w-md w-full p-8 bg-white rounded-xl shadow-lg">
-        <h2 className="text-2xl font-bold mb-6 text-center">التحقق من تسجيل الدخول</h2>
-        <p className="text-gray-600 mb-6 text-center text-sm">أدخل الكود المكون من 5 أرقام الذي تم إرساله إلى بريدك الإلكتروني</p>
+        <h2 className="text-2xl font-bold mb-6 text-center">التحقق من الدخول</h2>
+        <p className="text-gray-600 mb-6 text-center text-sm">أدخل الكود المكون من 5 أرقام الذي تم إرساله إليك</p>
         
         {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>}
         {message && <div className="mb-4 p-3 bg-green-100 text-green-700 rounded-lg text-sm">{message}</div>}
         
         <form onSubmit={handleVerifyLogin} className="space-y-4">
+          <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
+            <div className="flex items-center text-gray-700 overflow-hidden">
+              <User className="w-5 h-5 ml-2 text-gray-400 flex-shrink-0" />
+              <span dir="ltr" className="text-sm font-medium truncate">{email}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setShowVerifyLogin(false);
+                setCode("");
+                setError("");
+                setMessage("");
+              }}
+              className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline font-bold mr-2 flex-shrink-0"
+            >
+              تعديل
+            </button>
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">كود التحقق</label>
             <div className="relative">
@@ -225,18 +281,29 @@ export default function Auth() {
           >
             {loading ? "جاري التحقق..." : "تأكيد الدخول"}
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setShowVerifyLogin(false);
-              setCode("");
-              setError("");
-              setMessage("");
-            }}
-            className="w-full text-sm text-indigo-600 hover:underline mt-4"
-          >
-            العودة لتسجيل الدخول
-          </button>
+          
+          <div className="flex flex-col space-y-3 mt-4 pt-4 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={handleResendLoginCode}
+              disabled={loading}
+              className="w-full text-sm text-indigo-600 font-medium hover:underline disabled:opacity-50"
+            >
+              إعادة إرسال الرمز
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowVerifyLogin(false);
+                setCode("");
+                setError("");
+                setMessage("");
+              }}
+              className="w-full text-sm text-gray-500 hover:text-gray-700 hover:underline"
+            >
+              العودة لتسجيل الدخول
+            </button>
+          </div>
         </form>
       </div>
     );
@@ -246,22 +313,22 @@ export default function Auth() {
     return (
       <div className="max-w-md w-full p-8 bg-white rounded-xl shadow-lg">
         <h2 className="text-2xl font-bold mb-6 text-center">نسيت كلمة السر</h2>
-        <p className="text-gray-600 mb-6 text-center text-sm">أدخل بريدك الإلكتروني وسنرسل لك كود لإعادة تعيين كلمة السر</p>
+        <p className="text-gray-600 mb-6 text-center text-sm">أدخل بريدك الإلكتروني أو رقم هاتفك وسنرسل لك كود لإعادة تعيين كلمة السر</p>
         
         {error && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm">{error}</div>}
         
         <form onSubmit={handleForgot} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني أو رقم الهاتف</label>
             <div className="relative">
-              <Mail className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
+              <User className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
               <input
-                type="email"
+                type="text"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                placeholder="example@gmail.com"
+                className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+                placeholder="example@gmail.com أو رقم الهاتف بدون +"
               />
             </div>
           </div>
@@ -295,7 +362,7 @@ export default function Auth() {
         <form onSubmit={handleReset} className="space-y-4">
           <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
             <div className="flex items-center text-gray-700 overflow-hidden">
-              <Mail className="w-5 h-5 ml-2 text-gray-400 flex-shrink-0" />
+              <User className="w-5 h-5 ml-2 text-gray-400 flex-shrink-0" />
               <span dir="ltr" className="text-sm font-medium truncate">{email}</span>
             </div>
             <button
@@ -411,16 +478,16 @@ export default function Auth() {
           </div>
         )}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني أو رقم الهاتف</label>
           <div className="relative">
-            <Mail className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
+            <User className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
             <input
-              type="email"
+              type="text"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-              placeholder="example@gmail.com"
+              className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-right"
+              placeholder="example@gmail.com أو رقم الهاتف بدون +"
             />
           </div>
         </div>

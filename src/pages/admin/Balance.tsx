@@ -172,7 +172,7 @@ export default function Balance() {
                 <p className="font-bold text-lg text-gray-900">{user.name}</p>
               </div>
               <div>
-                <p className="text-sm text-gray-500 mb-1">البريد الإلكتروني</p>
+                <p className="text-sm text-gray-500 mb-1">البريد الإلكتروني أو رقم الهاتف</p>
                 <p className="font-bold text-lg text-gray-900">{user.email}</p>
               </div>
               <div>

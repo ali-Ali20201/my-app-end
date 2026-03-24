@@ -17,11 +17,11 @@ import {
   Gift,
   Phone,
   Mail,
+  Smartphone,
   Copy,
   Check,
   Users as UsersIcon,
   Pencil,
-  Smartphone
 } from "lucide-react";
 
 import { useSocket } from "../hooks/useSocket";
@@ -38,6 +38,7 @@ export default function Layout() {
   const [appPaused, setAppPaused] = useState(false);
   const [appPausedMessage, setAppPausedMessage] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [settings, setSettings] = useState<any>({});
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showProfileEdit, setShowProfileEdit] = useState(false);
   const [notifications, setNotifications] = useState({ orders: 0, recharges: 0, messages: 0 });
@@ -272,6 +273,7 @@ export default function Layout() {
       const res = await apiFetch("/api/settings");
       if (!res.ok) throw new Error('Failed to fetch settings');
       const data = await res.json();
+      setSettings(data);
       setAppPaused(data.app_paused === "true");
       setAppPausedMessage(data.app_paused_message || "التطبيق متوقف حالياً للصيانة، يرجى العودة لاحقاً.");
     } catch (err) {
@@ -422,7 +424,7 @@ export default function Layout() {
     { to: "/recharge", icon: <CreditCard className="w-5 h-5 ml-3" />, text: "شحن الرصيد" },
     { to: "/orders", icon: <ListOrdered className="w-5 h-5 ml-3" />, text: "طلباتي", badge: notifications.orders + notifications.recharges },
     { to: "/promo-codes", icon: <Gift className="w-5 h-5 ml-3" />, text: "أكواد الإحالة" },
-    { to: "/mail", icon: <Mail className="w-5 h-5 ml-3" />, text: "البريد", badge: notifications.messages },
+    { to: "/mail", icon: <Mail className="w-5 h-5 ml-3" />, text: "البريد / الرسائل", badge: notifications.messages },
     { to: "/instructions", icon: <HelpCircle className="w-5 h-5 ml-3" />, text: "التعليمات" },
     { to: "/contact-us", icon: <Phone className="w-5 h-5 ml-3" />, text: "اتصل بنا" },
   ];
@@ -477,7 +479,17 @@ export default function Layout() {
                   </span>
                 )}
               </button>
-              <span className="text-xl font-bold text-indigo-600 mr-4">علي كاش</span>
+              <div className="flex items-center mr-4">
+                <img 
+                  src={settings.main_logo || "/app-icon.png?v=1"} 
+                  alt="Logo" 
+                  className="w-8 h-8 object-contain ml-2"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = 'https://picsum.photos/seed/ali/64/64';
+                  }}
+                />
+                <span className="text-xl font-bold text-indigo-600">علي كاش</span>
+              </div>
             </div>
 
             {/* Balance Display (Left side in RTL) */}
@@ -551,9 +563,18 @@ export default function Layout() {
                       </div>
                     )}
                   </div>
-                  <div className="text-sm font-medium text-gray-500 truncate flex items-center gap-2">
-                    {user?.email}
-                  </div>
+                  {user?.phone && (
+                    <div className="text-sm font-medium text-gray-500 truncate flex items-center gap-2">
+                      <Smartphone className="w-3 h-3" />
+                      {user.phone}
+                    </div>
+                  )}
+                  {user?.email && (
+                    <div className="text-sm font-medium text-gray-500 truncate flex items-center gap-2">
+                      <Mail className="w-3 h-3" />
+                      {user.email}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -740,7 +761,6 @@ export default function Layout() {
         isOpen={showProfileEdit} 
         onClose={() => setShowProfileEdit(false)} 
       />
-      <InstallPrompt />
     </div>
   );
 }

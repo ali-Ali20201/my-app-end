@@ -53,7 +53,7 @@ export default function Mail() {
     <div className="max-w-4xl mx-auto space-y-6">
       <div className="flex items-center gap-3 mb-8">
         <MailIcon className="w-8 h-8 text-indigo-600" />
-        <h1 className="text-3xl font-bold text-gray-900">البريد الوارد</h1>
+        <h1 className="text-3xl font-bold text-gray-900">البريد / الرسائل الواردة</h1>
       </div>
 
       {messages.length === 0 ? (

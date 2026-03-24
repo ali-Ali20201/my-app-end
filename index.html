@@ -7,8 +7,8 @@
     <link rel="icon" type="image/png" href="/app-icon.png?v=8" />
     <title>علي كاش</title>
     
+    <!-- السكربت الذكي الذي يختار المانيفست حسب الرابط -->
     <script>
-      // 1. السكربت الذكي الذي يختار المانيفست حسب الرابط (تم إرجاعه كما طلبت)
       var link = document.createElement('link');
       link.rel = 'manifest';
       if (window.location.pathname.startsWith('/adminali20112024')) {
@@ -17,6 +17,15 @@
         link.href = '/manifest-user.json';
       }
       document.head.appendChild(link);
+    </script>
+
+    <script>
+      // التقاط حدث التثبيت مبكراً جداً لضمان عمل زر التثبيت
+      window.addEventListener('beforeinstallprompt', (e) => {
+        e.preventDefault();
+        window.deferredPrompt = e;
+        console.log('beforeinstallprompt event captured globally');
+      });
     </script>
 
   </head>

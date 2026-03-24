@@ -13,12 +13,24 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
   const [step, setStep] = useState<'send_code' | 'verify_code' | 'edit_profile'>('send_code');
   const [code, setCode] = useState('');
   const [name, setName] = useState(user?.name || '');
-  const [email, setEmail] = useState(user?.email || '');
+  const [email, setEmail] = useState(user?.email || user?.phone || '');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+
+  const sanitizeIdentifier = (val: string) => {
+    if (!val) return val;
+    const trimmed = val.trim();
+    if (trimmed.includes("@")) return trimmed; // Email
+    
+    // Phone number sanitization
+    let sanitized = trimmed.replace(/\s+/g, ''); // Remove all spaces
+    if (sanitized.startsWith('+')) sanitized = sanitized.slice(1); // Remove leading +
+    if (sanitized.startsWith('00')) sanitized = sanitized.slice(2); // Remove leading 00
+    return sanitized;
+  };
 
   if (!isOpen || !user) return null;
 
@@ -30,12 +42,12 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
       const res = await apiFetch('/api/auth/send-edit-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email })
+        body: JSON.stringify({ emailOrPhone: user.email || user.phone })
       });
       const data = await res.json();
       if (res.ok) {
         setStep('verify_code');
-        setMessage('تم إرسال كود التحقق إلى بريدك الإلكتروني الحالي');
+        setMessage('تم إرسال كود التحقق إليك');
       } else {
         setError(data.error || 'حدث خطأ أثناء إرسال الكود');
       }
@@ -54,7 +66,7 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
       const res = await apiFetch('/api/auth/verify-edit-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: user.email, code })
+        body: JSON.stringify({ emailOrPhone: user.email || user.phone, code })
       });
       const data = await res.json();
       if (res.ok) {
@@ -75,15 +87,17 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
     e.preventDefault();
     setLoading(true);
     setError('');
+    const sanitizedEmail = sanitizeIdentifier(email);
     try {
       const res = await apiFetch('/api/auth/update-profile', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: user.id, name, email, password })
+        body: JSON.stringify({ id: user.id, name, emailOrPhone: sanitizedEmail, password })
       });
       const data = await res.json();
       if (res.ok) {
-        setUser({ ...user, name, email });
+        const isEmail = sanitizedEmail.includes('@');
+        setUser({ ...user, name, email: isEmail ? sanitizedEmail : null, phone: !isEmail ? sanitizedEmail : null });
         setMessage('تم تحديث البيانات بنجاح');
         setTimeout(() => {
           onClose();
@@ -118,7 +132,7 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
 
           {step === 'send_code' && (
             <div className="text-center">
-              <p className="mb-6 text-gray-600">لتعديل بياناتك، يجب أولاً التحقق من هويتك بإرسال كود إلى بريدك الإلكتروني الحالي ({user.email}).</p>
+              <p className="mb-6 text-gray-600">لتعديل بياناتك، يجب أولاً التحقق من هويتك بإرسال كود إليك ({user.email || user.phone}).</p>
               <button
                 onClick={handleSendCode}
                 disabled={loading}
@@ -172,15 +186,15 @@ export default function ProfileEditModal({ isOpen, onClose }: ProfileEditModalPr
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">البريد الإلكتروني أو رقم الهاتف</label>
                 <div className="relative">
-                  <Mail className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
+                  <User className="absolute right-3 top-3 w-5 h-5 text-gray-400" />
                   <input
-                    type="email"
+                    type="text"
                     required
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                    className="w-full pr-10 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-right"
                   />
                 </div>
               </div>

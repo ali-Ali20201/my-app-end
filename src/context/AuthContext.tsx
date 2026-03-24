@@ -5,7 +5,8 @@ import { apiFetch } from '../utils/api';
 type User = {
   id: number;
   name: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   balance: number;
   role: "admin" | "user";
   a_code?: string;
@@ -15,9 +16,9 @@ type User = {
 type AuthContextType = {
   user: User | null;
   setUser: React.Dispatch<React.SetStateAction<User | null>>;
-  login: (email: string, password: string) => Promise<any>;
-  verifyLogin: (email: string, code: string) => Promise<void>;
-  register: (name: string, email: string, password: string) => Promise<void>;
+  login: (emailOrPhone: string, password: string) => Promise<any>;
+  verifyLogin: (emailOrPhone: string, code: string) => Promise<void>;
+  register: (name: string, emailOrPhone: string, password: string) => Promise<any>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   updateCurrency: (currency: string) => Promise<void>;
@@ -116,11 +117,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, []);
 
-  const login = async (email: string, password: string) => {
+  const login = async (emailOrPhone: string, password: string) => {
     const res = await apiFetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ emailOrPhone, password }),
     });
     
     const data = await res.json().catch(() => ({ error: "فشل تسجيل الدخول" }));
@@ -129,16 +130,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       throw new Error(data.error || "فشل تسجيل الدخول");
     }
     
+    if (data.require_code) {
+      return data;
+    }
+
     setUser(data);
     localStorage.setItem("user", JSON.stringify(data));
     return data;
   };
 
-  const verifyLogin = async (email: string, code: string) => {
+  const verifyLogin = async (emailOrPhone: string, code: string) => {
     const res = await apiFetch("/api/auth/verify-login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, code }),
+      body: JSON.stringify({ emailOrPhone, code }),
     });
     
     const data = await res.json().catch(() => ({ error: "فشل التحقق من الكود" }));
@@ -149,13 +154,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
     
     setUser(data);
     localStorage.setItem("user", JSON.stringify(data));
+    return data;
   };
 
-  const register = async (name: string, email: string, password: string) => {
+  const register = async (name: string, emailOrPhone: string, password: string) => {
     const res = await apiFetch("/api/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, email, password }),
+      body: JSON.stringify({ name, emailOrPhone, password }),
     });
     
     const data = await res.json().catch(() => ({ error: "فشل التسجيل" }));
@@ -164,8 +170,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       throw new Error(data.error || "فشل التسجيل");
     }
     
+    if (data.require_code) {
+      return data;
+    }
+
     setUser(data);
     localStorage.setItem("user", JSON.stringify(data));
+    return data;
   };
 
   const logout = () => {

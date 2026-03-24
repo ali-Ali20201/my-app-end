@@ -31,6 +31,18 @@ export default function Users() {
   const [editForm, setEditForm] = useState<Partial<User>>({});
   const socket = useSocket();
 
+  const sanitizeIdentifier = (val: string) => {
+    if (!val) return val;
+    const trimmed = val.trim();
+    if (trimmed.includes("@")) return trimmed; // Email
+    
+    // Phone number sanitization
+    let sanitized = trimmed.replace(/\s+/g, ''); // Remove all spaces
+    if (sanitized.startsWith('+')) sanitized = sanitized.slice(1); // Remove leading +
+    if (sanitized.startsWith('00')) sanitized = sanitized.slice(2); // Remove leading 00
+    return sanitized;
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchStats();
@@ -148,12 +160,15 @@ export default function Users() {
     e.preventDefault();
     if (!selectedUser) return;
 
+    const sanitizedEmail = sanitizeIdentifier(editForm.email || "");
+
     try {
       const res = await apiFetch(`/api/admin/users/${selectedUser.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...editForm,
+          email: sanitizedEmail,
           password: editForm.plain_password // Send plain_password as password to be hashed
         })
       });
@@ -249,7 +264,7 @@ export default function Users() {
           <div className="relative w-full md:w-96">
             <input
               type="text"
-              placeholder="ابحث بالاسم، البريد، الكود أو المعرف..."
+              placeholder="ابحث بالاسم، البريد أو الهاتف، الكود أو المعرف..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
@@ -264,7 +279,7 @@ export default function Users() {
               <tr>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">المعرف (ID)</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">المستخدم</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">البريد الإلكتروني</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">البريد الإلكتروني أو رقم الهاتف</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">كلمة المرور</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الرصيد</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">الدور</th>
@@ -516,9 +531,9 @@ export default function Users() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">البريد الإلكتروني</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">البريد الإلكتروني أو رقم الهاتف</label>
                   <input
-                    type="email"
+                    type="text"
                     required
                     value={editForm.email || ''}
                     onChange={e => setEditForm({...editForm, email: e.target.value})}

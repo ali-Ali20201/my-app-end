@@ -216,6 +216,14 @@ async function sendPushNotification(userId: number, title: string, body: string)
   }
 }
 
+function isAdminEmail(email: string | null) {
+  if (!email) return false;
+  const adminEmails = process.env.ADMIN_EMAIL
+    ? process.env.ADMIN_EMAIL.split(",").map((e) => e.trim())
+    : ["lyhajmry6@gmail.com", "lyhajmry48@gmail.com"];
+  return adminEmails.includes(email);
+}
+
 // Helper to send push to all admins
 async function sendPushToAdmins(title: string, body: string) {
   try {
@@ -300,6 +308,48 @@ async function sendEmail({ to, subject, text, html }: { to: string; subject: str
   }
 }
 
+const sanitizeIdentifier = (val: string) => {
+  if (!val) return val;
+  const trimmed = val.trim();
+  if (trimmed.includes("@")) return trimmed; // Email
+  
+  // Phone number sanitization
+  let sanitized = trimmed.replace(/\s+/g, ''); // Remove all spaces
+  if (sanitized.startsWith('+')) sanitized = sanitized.slice(1); // Remove leading +
+  if (sanitized.startsWith('00')) sanitized = sanitized.slice(2); // Remove leading 00
+  return sanitized;
+};
+
+async function sendWhatsAppMessage(phone: string, message: string) {
+  const token = "626wvutx1p3yvmy2";
+  const instanceId = "instance166970";
+  const url = `https://api.ultramsg.com/${instanceId}/messages/chat`;
+  
+  // Format phone number (remove +, spaces, etc.)
+  const formattedPhone = phone.replace(/\D/g, '');
+
+  const data = new URLSearchParams();
+  data.append("token", token);
+  data.append("to", formattedPhone);
+  data.append("body", message);
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: data.toString(),
+    });
+    const result = await response.json();
+    console.log("UltraMsg response:", result);
+    return result;
+  } catch (error) {
+    console.error("UltraMsg error:", error);
+    throw new Error(`فشل إرسال رسالة واتساب: ${error instanceof Error ? error.message : 'خطأ غير معروف'}`);
+  }
+}
+
 // Google OAuth Routes
 app.get("/api/auth/google/url", (req, res) => {
   const clientOrigin = req.query.origin as string;
@@ -360,11 +410,13 @@ app.get("/api/auth/google/callback", asyncHandler(async (req: any, res: any) => 
   if (!user) {
     const aCode = Math.random().toString(36).substring(2, 8).toUpperCase();
     const randomPassword = await bcrypt.hash(Math.random().toString(36), 10);
-    const adminEmails = process.env.ADMIN_EMAIL ? process.env.ADMIN_EMAIL.split(",").map((e: string) => e.trim()) : [];
-    const role = adminEmails.includes(email) ? "admin" : "user";
+    const role = isAdminEmail(email) ? "admin" : "user";
     
     await db.prepare("INSERT INTO users (name, email, password, a_code, role) VALUES (?, ?, ?, ?, ?)").run(name, email, randomPassword, aCode, role);
     user = await db.prepare("SELECT * FROM users WHERE email = ?").get(email);
+  } else if (isAdminEmail(email) && user.role !== "admin") {
+    await db.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(user.id);
+    user.role = "admin";
   }
   
   res.send(`
@@ -386,16 +438,19 @@ app.get("/api/auth/google/callback", asyncHandler(async (req: any, res: any) => 
 
 // Auth Routes
 app.post("/api/auth/register", asyncHandler(async (req: any, res: any) => {
-  const { name, email, password } = req.body;
-  if (!name || !email || !password)
+  const { name, password } = req.body;
+  const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+  
+  if (!name || !emailOrPhone || !password)
     return res.status(400).json({ error: "جميع الحقول مطلوبة" });
+
+  const isEmail = emailOrPhone.includes("@");
+  const email = isEmail ? emailOrPhone : null;
+  const phone = !isEmail ? emailOrPhone : null;
 
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const adminEmails = process.env.ADMIN_EMAIL
-      ? process.env.ADMIN_EMAIL.split(",").map((e) => e.trim())
-      : [];
-    const role = adminEmails.includes(email) ? "admin" : "user";
+    const role = isAdminEmail(email) ? "admin" : "user";
 
     let a_code;
     let isUnique = false;
@@ -411,46 +466,81 @@ app.post("/api/auth/register", asyncHandler(async (req: any, res: any) => {
       if (!existing) isUnique = true;
     }
 
+    // Generate 5-digit verification code
+    const verificationCode = Math.floor(10000 + Math.random() * 90000).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+
     const result = await db
       .prepare(
-        "INSERT INTO users (name, email, password, plain_password, role, a_code, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "INSERT INTO users (name, email, phone, password, plain_password, role, a_code, is_verified, login_code, login_code_expires, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
       )
-      .run(name, email, hashedPassword, password, role, a_code);
+      .run(name, email, phone, hashedPassword, password, role, a_code, false, verificationCode, expires.toISOString());
+      
     const user = (await db
       .prepare(
-        "SELECT id, name, email, balance, role, a_code, preferred_currency, created_at FROM users WHERE id = ?",
+        "SELECT id, name, email, phone, balance, role, a_code, preferred_currency, created_at FROM users WHERE id = ?",
       )
       .get(result.lastInsertRowid)) as any;
 
     const io = req.app.get("io");
     if (io) io.emit("user_registered", user);
 
-    res.json(user);
+    // Send Verification Code
+    try {
+      if (email) {
+        await sendEmail({
+          to: email,
+          subject: "كود التحقق لإنشاء الحساب",
+          html: `
+            <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
+              <h2 style="color: #4f46e5;">إنشاء حساب جديد</h2>
+              <p style="font-size: 16px; color: #333;">لقد طلبت إنشاء حساب جديد.</p>
+              <p style="font-size: 16px; color: #333;">كود التحقق الخاص بك هو:</p>
+              <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
+                <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${verificationCode}</h1>
+              </div>
+              <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 10 دقائق فقط.</p>
+            </div>
+          `,
+        });
+      } else if (phone) {
+        await sendWhatsAppMessage(phone, `كود التحقق الخاص بك في Ali Cash هو: ${verificationCode}`);
+      }
+    } catch (err) {
+      console.error("Error sending verification code during register:", err);
+    }
+
+    res.json({ require_code: true, emailOrPhone: emailOrPhone.trim() });
   } catch (err: any) {
     if (
       err.message.includes("UNIQUE constraint failed") ||
       err.message.includes("duplicate key value")
     ) {
-      return res.status(400).json({ error: "البريد الإلكتروني مسجل مسبقاً" });
+      return res.status(400).json({ error: "البريد الإلكتروني أو رقم الهاتف مسجل مسبقاً" });
     }
     res.status(500).json({ error: "حدث خطأ أثناء التسجيل" });
   }
 }));
 
 app.post("/api/auth/login", asyncHandler(async (req: any, res: any) => {
-  const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ error: "البريد وكلمة السر مطلوبان" });
+  const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+  const { password } = req.body;
+  
+  if (!emailOrPhone || !password)
+    return res.status(400).json({ error: "البريد أو رقم الهاتف وكلمة السر مطلوبان" });
+
+  const isEmail = emailOrPhone.includes("@");
+  const identifier = emailOrPhone;
 
   const user = (await db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email)) as any;
+    .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+    .get(identifier)) as any;
 
   // Check if user exists
   if (!user) {
     return res
       .status(401)
-      .json({ error: "البريد الإلكتروني غير مسجل، الرجاء إنشاء حساب جديد" });
+      .json({ error: "البريد الإلكتروني أو رقم الهاتف غير مسجل، الرجاء إنشاء حساب جديد" });
   }
 
   // Check if user has a password (in case they used OAuth before)
@@ -477,50 +567,46 @@ app.post("/api/auth/login", asyncHandler(async (req: any, res: any) => {
     )
     .run(loginCode, expires.toISOString(), user.id);
 
-  // Send Email
+  // Send Code
   try {
-    await sendEmail({
-      to: email,
-      subject: "كود التحقق لتسجيل الدخول",
-      html: `
-        <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
-          <h2 style="color: #4f46e5;">تسجيل الدخول</h2>
-          <p style="font-size: 16px; color: #333;">لقد طلبت تسجيل الدخول إلى حسابك.</p>
-          <p style="font-size: 16px; color: #333;">كود التحقق الخاص بك هو:</p>
-          <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
-            <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${loginCode}</h1>
+    if (user.email) {
+      await sendEmail({
+        to: user.email,
+        subject: "كود التحقق لتسجيل الدخول",
+        html: `
+          <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
+            <h2 style="color: #4f46e5;">تسجيل الدخول</h2>
+            <p style="font-size: 16px; color: #333;">لقد طلبت تسجيل الدخول إلى حسابك.</p>
+            <p style="font-size: 16px; color: #333;">كود التحقق الخاص بك هو:</p>
+            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
+              <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${loginCode}</h1>
+            </div>
+            <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 10 دقائق فقط.</p>
+            <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 10 دقائق فقط.</p>
-          <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
-        </div>
-      `,
-    });
+        `,
+      });
+    } else if (user.phone) {
+      await sendWhatsAppMessage(user.phone, `كود التحقق الخاص بك في Ali Cash هو: ${loginCode}`);
+    }
   } catch (err) {
-    console.error("Email error during login:", err);
-    return res.status(500).json({ error: `فشل في إرسال البريد الإلكتروني: ${err instanceof Error ? err.message : 'خطأ غير معروف'}` });
+    console.error("Error during login code send:", err);
+    return res.status(500).json({ error: `فشل في إرسال كود التحقق: ${err instanceof Error ? err.message : 'خطأ غير معروف'}` });
   }
 
-  res.json({ require_code: true, email: user.email });
-  
-  // Return user directly (Commented out because we want to require the code)
-  // res.json({
-  //   id: user.id,
-  //   name: user.name,
-  //   email: user.email,
-  //   balance: user.balance,
-  //   role: user.role,
-  //   a_code: user.a_code,
-  //   preferred_currency: user.preferred_currency,
-  //   created_at: user.created_at
-  // });
+  res.json({ require_code: true, emailOrPhone: identifier });
 }));
 
 app.post("/api/auth/verify-login", asyncHandler(async (req: any, res: any) => {
-  const { email, code } = req.body;
+  const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+  const { code } = req.body;
+
+  const isEmail = emailOrPhone.includes("@");
+  const identifier = emailOrPhone;
 
   const user = (await db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email)) as any;
+    .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+    .get(identifier)) as any;
   if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
 
   if (user.login_code !== code) {
@@ -531,10 +617,10 @@ app.post("/api/auth/verify-login", asyncHandler(async (req: any, res: any) => {
     return res.status(400).json({ error: "الكود منتهي الصلاحية" });
   }
 
-  // Clear code
+  // Clear code and set is_verified to true
   await db
     .prepare(
-      "UPDATE users SET login_code = NULL, login_code_expires = NULL WHERE id = ?",
+      "UPDATE users SET login_code = NULL, login_code_expires = NULL, is_verified = TRUE WHERE id = ?",
     )
     .run(user.id);
 
@@ -587,11 +673,14 @@ app.post("/api/auth/verify-login", asyncHandler(async (req: any, res: any) => {
 }));
 
 app.post("/api/auth/forgot-password", asyncHandler(async (req: any, res: any) => {
-  const { email } = req.body;
-  console.log(`[Auth Debug] Forgot password request for: ${email}`);
+  const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+  const isEmail = emailOrPhone.includes("@");
+  const identifier = emailOrPhone;
+
+  console.log(`[Auth Debug] Forgot password request for: ${identifier}`);
   const user = (await db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email)) as any;
+    .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+    .get(identifier)) as any;
   if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
 
   const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -601,40 +690,44 @@ app.post("/api/auth/forgot-password", asyncHandler(async (req: any, res: any) =>
     .prepare("UPDATE users SET reset_code = ?, reset_expires = ? WHERE id = ?")
     .run(resetCode, expires.toISOString(), user.id);
 
-  // Send Email
+  // Send Code
   try {
-    if (!process.env.BREVO_USER || !process.env.BREVO_PASS) {
-      throw new Error("لم يتم إعداد مفتاح خدمة البريد (BREVO_USER/BREVO_PASS)");
-    }
-
-    await sendEmail({
-      to: email,
-      subject: "كود إعادة تعيين كلمة السر",
-      html: `
-        <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
-          <h2 style="color: #4f46e5;">إعادة تعيين كلمة السر</h2>
-          <p style="font-size: 16px; color: #333;">لقد طلبت إعادة تعيين كلمة السر الخاصة بك.</p>
-          <p style="font-size: 16px; color: #333;">كود إعادة التعيين الخاص بك هو:</p>
-          <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
-            <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${resetCode}</h1>
+    if (user.email) {
+      await sendEmail({
+        to: user.email,
+        subject: "كود إعادة تعيين كلمة السر",
+        html: `
+          <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
+            <h2 style="color: #4f46e5;">إعادة تعيين كلمة السر</h2>
+            <p style="font-size: 16px; color: #333;">لقد طلبت إعادة تعيين كلمة السر الخاصة بك.</p>
+            <p style="font-size: 16px; color: #333;">كود إعادة التعيين الخاص بك هو:</p>
+            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
+              <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${resetCode}</h1>
+            </div>
+            <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 15 دقيقة فقط.</p>
+            <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 15 دقيقة فقط.</p>
-          <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
-        </div>
-      `,
-    });
+        `,
+      });
+    } else if (user.phone) {
+      await sendWhatsAppMessage(user.phone, `كود إعادة تعيين كلمة السر الخاص بك في Ali Cash هو: ${resetCode}`);
+    }
     res.json({ success: true });
   } catch (err: any) {
-    console.error("Email error during forgot password:", err);
-    res.status(500).json({ error: `فشل في إرسال البريد الإلكتروني: ${err.message}` });
+    console.error("Error during forgot password code send:", err);
+    res.status(500).json({ error: `فشل في إرسال كود التحقق: ${err.message}` });
   }
 }));
 
 app.post("/api/auth/reset-password", asyncHandler(async (req: any, res: any) => {
-  const { email, code, newPassword } = req.body;
+  const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+  const { code, newPassword } = req.body;
+  const isEmail = emailOrPhone.includes("@");
+  const identifier = emailOrPhone;
+
   const user = (await db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email)) as any;
+    .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+    .get(identifier)) as any;
 
   if (!user || user.reset_code !== code)
     return res.status(400).json({ error: "الكود غير صحيح" });
@@ -655,10 +748,13 @@ app.post("/api/auth/reset-password", asyncHandler(async (req: any, res: any) => 
 
 app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => {
   try {
-    const { email } = req.body;
+    const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+    const isEmail = emailOrPhone.includes("@");
+    const identifier = emailOrPhone;
+
     const user = (await db
-      .prepare("SELECT * FROM users WHERE email = ?")
-      .get(email)) as any;
+      .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+      .get(identifier)) as any;
     if (!user) return res.status(404).json({ error: "المستخدم غير موجود" });
 
     const code = Math.floor(10000 + Math.random() * 90000).toString();
@@ -668,27 +764,27 @@ app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => 
       .prepare("UPDATE users SET reset_code = ?, reset_expires = ? WHERE id = ?")
       .run(code, expires, user.id);
 
-    // Send Email
-    if (!process.env.BREVO_USER || !process.env.BREVO_PASS) {
-      throw new Error("لم يتم إعداد مفتاح خدمة البريد (BREVO_USER/BREVO_PASS)");
-    }
-
-    await sendEmail({
-      to: email,
-      subject: "كود التحقق لتعديل الملف الشخصي",
-      html: `
-        <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
-          <h2 style="color: #4f46e5;">تعديل الملف الشخصي</h2>
-          <p style="font-size: 16px; color: #333;">لقد طلبت تعديل بيانات ملفك الشخصي.</p>
-          <p style="font-size: 16px; color: #333;">كود التحقق الخاص بك هو:</p>
-          <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
-            <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${code}</h1>
+    // Send Code
+    if (user.email) {
+      await sendEmail({
+        to: user.email,
+        subject: "كود التحقق لتعديل الملف الشخصي",
+        html: `
+          <div dir="rtl" style="font-family: Arial, sans-serif; padding: 20px; text-align: center;">
+            <h2 style="color: #4f46e5;">تعديل الملف الشخصي</h2>
+            <p style="font-size: 16px; color: #333;">لقد طلبت تعديل بيانات ملفك الشخصي.</p>
+            <p style="font-size: 16px; color: #333;">كود التحقق الخاص بك هو:</p>
+            <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px auto; max-width: 200px;">
+              <h1 style="color: #111827; margin: 0; font-size: 32px; letter-spacing: 5px;">${code}</h1>
+            </div>
+            <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 10 دقائق فقط.</p>
+            <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
           </div>
-          <p style="color: #6b7280; font-size: 14px;">هذا الكود صالح لمدة 10 دقائق فقط.</p>
-          <p style="color: #ef4444; font-size: 14px; margin-top: 20px;">إذا لم تطلب هذا الكود، يرجى تجاهل هذه الرسالة.</p>
-        </div>
-      `,
-    });
+        `,
+      });
+    } else if (user.phone) {
+      await sendWhatsAppMessage(user.phone, `كود التحقق الخاص بك في Ali Cash هو: ${code}`);
+    }
     res.json({ success: true });
   } catch (err: any) {
     console.error("Send edit code error:", err);
@@ -698,10 +794,14 @@ app.post("/api/auth/send-edit-code", asyncHandler(async (req: any, res: any) => 
 
 app.post("/api/auth/verify-edit-code", asyncHandler(async (req: any, res: any) => {
   try {
-    const { email, code } = req.body;
+    const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
+    const { code } = req.body;
+    const isEmail = emailOrPhone.includes("@");
+    const identifier = emailOrPhone;
+
     const user = (await db
-      .prepare("SELECT * FROM users WHERE email = ?")
-      .get(email)) as any;
+      .prepare(isEmail ? "SELECT * FROM users WHERE email = ?" : "SELECT * FROM users WHERE phone = ?")
+      .get(identifier)) as any;
 
     if (!user || user.reset_code !== code)
       return res.status(400).json({ error: "الكود غير صحيح" });
@@ -726,24 +826,37 @@ app.post("/api/auth/verify-edit-code", asyncHandler(async (req: any, res: any) =
 
 app.put("/api/auth/update-profile", asyncHandler(async (req: any, res: any) => {
   try {
-    const { id, name, email, password } = req.body;
+    const { id, name, password } = req.body;
+    const emailOrPhone = sanitizeIdentifier(req.body.emailOrPhone);
 
-    // Check if email is already taken by another user
-    const existingUser = await db
-      .prepare("SELECT * FROM users WHERE email = ? AND id != ?")
-      .get(email, id);
-    if (existingUser)
-      return res.status(400).json({ error: "البريد الإلكتروني مستخدم بالفعل" });
+    const isEmail = emailOrPhone.includes("@");
+    const email = isEmail ? emailOrPhone : null;
+    const phone = !isEmail ? emailOrPhone : null;
+
+    // Check if email or phone is already taken by another user
+    if (email) {
+      const existingUser = await db
+        .prepare("SELECT * FROM users WHERE email = ? AND id != ?")
+        .get(email, id);
+      if (existingUser)
+        return res.status(400).json({ error: "البريد الإلكتروني أو رقم الهاتف مستخدم بالفعل" });
+    } else if (phone) {
+      const existingUser = await db
+        .prepare("SELECT * FROM users WHERE phone = ? AND id != ?")
+        .get(phone, id);
+      if (existingUser)
+        return res.status(400).json({ error: "رقم الهاتف مستخدم بالفعل" });
+    }
 
     let query =
-      "UPDATE users SET name = ?, email = ?, is_modified = 1 WHERE id = ?";
-    let params = [name, email, id];
+      "UPDATE users SET name = ?, email = ?, phone = ?, is_modified = 1 WHERE id = ?";
+    let params = [name, email, phone, id];
 
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
       query =
-        "UPDATE users SET name = ?, email = ?, password = ?, plain_password = ?, is_modified = 1 WHERE id = ?";
-      params = [name, email, hashedPassword, password, id];
+        "UPDATE users SET name = ?, email = ?, phone = ?, password = ?, plain_password = ?, is_modified = 1 WHERE id = ?";
+      params = [name, email, phone, hashedPassword, password, id];
     }
 
     await db.prepare(query).run(...params);
@@ -765,7 +878,7 @@ app.post("/api/auth/restore", asyncHandler(async (req: any, res: any) => {
 
   const user = (await db
     .prepare(
-      "SELECT id, name, email, balance, role, a_code, preferred_currency FROM users WHERE id = ?",
+      "SELECT id, name, email, phone, balance, role, a_code, preferred_currency FROM users WHERE id = ?",
     )
     .get(id)) as any;
   if (!user) return res.status(404).json({ error: "User not found" });
@@ -988,7 +1101,7 @@ app.get("/api/notifications/:userId", asyncHandler(async (req: any, res: any) =>
       .get(user.id)) as any;
     const messages = (await db
       .prepare(
-        "SELECT COUNT(*) as count FROM messages WHERE (user_id = ? OR user_id IS NULL) AND is_read = FALSE",
+        "SELECT COUNT(*) as count FROM messages WHERE (user_id = ? OR user_id IS NULL) AND is_read = 0",
       )
       .get(user.id)) as any;
     res.json({ orders: orders.count, recharges: recharges.count, messages: messages.count });
@@ -1021,7 +1134,7 @@ app.post("/api/notifications/read", asyncHandler(async (req: any, res: any) => {
     if (!type || type === 'messages') {
       await db
         .prepare(
-          "UPDATE messages SET is_read = TRUE WHERE user_id = ? OR user_id IS NULL",
+          "UPDATE messages SET is_read = 1 WHERE user_id = ? OR user_id IS NULL",
         )
         .run(user_id);
     }
@@ -1232,8 +1345,12 @@ app.delete("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
 app.put("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
   const { id } = req.params;
   if (!isValidId(id)) return res.status(400).json({ error: "Invalid user ID" });
-  const { name, email, password, balance, role, a_code, preferred_currency } =
-    req.body;
+  const { name, password, balance, role, a_code, preferred_currency } = req.body;
+  const emailOrPhone = sanitizeIdentifier(req.body.email);
+
+  const isEmail = emailOrPhone.includes("@");
+  const email = isEmail ? emailOrPhone : null;
+  const phone = !isEmail ? emailOrPhone : null;
 
   try {
     if (password) {
@@ -1242,13 +1359,14 @@ app.put("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
         .prepare(
           `
         UPDATE users 
-        SET name = ?, email = ?, password = ?, plain_password = ?, balance = ?, role = ?, a_code = ?, preferred_currency = ?
+        SET name = ?, email = ?, phone = ?, password = ?, plain_password = ?, balance = ?, role = ?, a_code = ?, preferred_currency = ?
         WHERE id = ?
       `,
         )
         .run(
           name,
           email,
+          phone,
           hashedPassword,
           password,
           balance,
@@ -1262,11 +1380,11 @@ app.put("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
         .prepare(
           `
         UPDATE users 
-        SET name = ?, email = ?, balance = ?, role = ?, a_code = ?, preferred_currency = ?
+        SET name = ?, email = ?, phone = ?, balance = ?, role = ?, a_code = ?, preferred_currency = ?
         WHERE id = ?
       `,
         )
-        .run(name, email, balance, role, a_code, preferred_currency, id);
+        .run(name, email, phone, balance, role, a_code, preferred_currency, id);
     }
     res.json({ success: true });
   } catch (err: any) {
@@ -1276,7 +1394,7 @@ app.put("/api/admin/users/:id", asyncHandler(async (req: any, res: any) => {
     ) {
       return res
         .status(400)
-        .json({ error: "البريد الإلكتروني أو كود المستخدم مسجل مسبقاً" });
+        .json({ error: "البريد الإلكتروني أو رقم الهاتف أو كود المستخدم مسجل مسبقاً" });
     }
     res.status(500).json({ error: "حدث خطأ أثناء تحديث المستخدم" });
   }
@@ -2417,6 +2535,13 @@ async function startServer() {
     if (!tableInfo.some((col) => col.name === "plain_password")) {
       await db.exec("ALTER TABLE users ADD COLUMN plain_password TEXT;");
     }
+    if (!tableInfo.some((col) => col.name === "phone")) {
+      await db.exec("ALTER TABLE users ADD COLUMN phone TEXT UNIQUE;");
+    }
+    if (!tableInfo.some((col) => col.name === "is_verified")) {
+      await db.exec("ALTER TABLE users ADD COLUMN is_verified BOOLEAN DEFAULT FALSE;");
+      await db.exec("UPDATE users SET is_verified = TRUE;");
+    }
   } catch (e) {
     console.log("Error adding user columns:", e);
   }
@@ -2509,7 +2634,7 @@ async function startServer() {
           user_id INTEGER,
           title TEXT,
           content TEXT,
-          is_read BOOLEAN DEFAULT FALSE,
+          is_read INTEGER DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           FOREIGN KEY(user_id) REFERENCES users(id)
       );
@@ -2573,8 +2698,27 @@ async function startServer() {
         )
         .run("Admin", "admin@admin.com", defaultPassword, "admin");
     }
+
+    // Ensure specific emails are admins
+    const adminEmails = process.env.ADMIN_EMAIL
+      ? process.env.ADMIN_EMAIL.split(",").map((e) => e.trim())
+      : ["lyhajmry6@gmail.com", "lyhajmry48@gmail.com"];
+    
+    // Add defaults if they are not in the env var
+    const defaults = ["lyhajmry6@gmail.com", "lyhajmry48@gmail.com"];
+    for (const d of defaults) {
+      if (!adminEmails.includes(d)) {
+        adminEmails.push(d);
+      }
+    }
+    
+    for (const email of adminEmails) {
+      if (email) {
+        await db.prepare("UPDATE users SET role = 'admin' WHERE email = ?").run(email);
+      }
+    }
   } catch (e) {
-    console.error("Error creating default admin:", e);
+    console.error("Error creating default admin or updating roles:", e);
   }
 
   const isProd = process.env.NODE_ENV === "production";
