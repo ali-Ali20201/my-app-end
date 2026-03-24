@@ -1,9 +1,14 @@
 import { useState, useEffect } from 'react';
+import { Navigate, useNavigate } from 'react-router-dom';
 
 export default function AdminPage() {
+  const navigate = useNavigate();
   const [password, setPassword] = useState('');
   const [isLogged, setIsLogged] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  // التحقق مما إذا كان التطبيق مثبتاً بالفعل
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
 
   useEffect(() => {
     // التحقق مما إذا كان الحدث قد تم التقاطه بالفعل في index.html
@@ -43,6 +48,7 @@ export default function AdminPage() {
         if (outcome === 'accepted') {
           setDeferredPrompt(null);
           (window as any).deferredPrompt = null;
+          navigate('/home');
         }
       } catch (err) {
         console.error("Installation prompt error:", err);
@@ -72,6 +78,11 @@ export default function AdminPage() {
   };
 
   const isInstalling = new URLSearchParams(window.location.search).get('install') === 'true';
+
+  // إذا كان التطبيق مثبتاً بالفعل، نوجهه فوراً لصفحة المستخدمين
+  if (isStandalone) {
+    return <Navigate to="/home" replace />;
+  }
 
   if (!isLogged) {
     return (
@@ -112,9 +123,16 @@ export default function AdminPage() {
       <h1 className="text-white text-3xl font-bold mb-4">نسخة المدير الخاصة</h1>
       <button 
         onClick={handleInstall}
-        className="bg-white text-[#b91c1c] px-10 py-4 rounded-2xl font-bold text-xl hover:bg-gray-100 transition-all"
+        className="bg-white text-[#b91c1c] px-10 py-4 rounded-2xl font-bold text-xl hover:bg-gray-100 transition-all mb-4 w-full max-w-xs"
       >
         تثبيت تطبيق الإدارة
+      </button>
+
+      <button 
+        onClick={() => navigate('/home')}
+        className="bg-transparent text-white border border-white/30 px-10 py-4 rounded-2xl font-bold text-lg hover:bg-white/10 transition-all w-full max-w-xs"
+      >
+        الدخول للموقع
       </button>
     </div>
   );
